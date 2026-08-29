@@ -1,0 +1,6 @@
+{
+  "name": "VYB",
+  "description": "Personal AI Operating System & JARVIS-inspired companion that unifies life context across family routines, transit, salary planning, diet-to-grocery loop, wardrobe, and projects.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
