@@ -14,6 +14,10 @@ import com.example.data.model.VybIntentPayload
 import com.example.data.remote.GeminiClient
 import com.example.data.repository.VybRepository
 import com.example.domain.brain.PersonalWorldModel
+import com.example.domain.brain.VybBrainStatus
+import com.example.domain.brain.WhatMattersNowSummary
+import com.example.domain.brain.VybRecommendedAction
+import com.example.domain.brain.LifeBriefing
 import com.example.domain.context.*
 import com.example.domain.learning.*
 import com.example.domain.permission.*
@@ -98,6 +102,25 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _permissionReports = MutableStateFlow<List<PermissionReport>>(emptyList())
     val permissionReports: StateFlow<List<PermissionReport>> = _permissionReports.asStateFlow()
+
+    // Master VybBrain Intelligence Layer
+    val vybBrain = repository.orchestrator.vybBrain
+    val brainStatus: StateFlow<VybBrainStatus> = vybBrain.brainStatus
+
+    private val _whatMattersNow = MutableStateFlow(vybBrain.getWhatMattersNow())
+    val whatMattersNow: StateFlow<WhatMattersNowSummary> = _whatMattersNow.asStateFlow()
+
+    private val _currentBriefing = MutableStateFlow(vybBrain.getMorningBriefing())
+    val currentBriefing: StateFlow<LifeBriefing> = _currentBriefing.asStateFlow()
+
+    private val _recommendedActions = MutableStateFlow(vybBrain.getRecommendedActions())
+    val recommendedActions: StateFlow<List<VybRecommendedAction>> = _recommendedActions.asStateFlow()
+
+    fun refreshBrainIntelligence() {
+        _whatMattersNow.value = vybBrain.getWhatMattersNow()
+        _currentBriefing.value = vybBrain.getMorningBriefing()
+        _recommendedActions.value = vybBrain.getRecommendedActions()
+    }
 
     // JARVIS Core Engine
     val jarvisCoreManager = JarvisCoreManager(application)
@@ -343,6 +366,20 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
                 vaultList = vaultItems
             )
             repository.orchestrator.cognitiveBrain.updateWorldModel(model)
+
+            val lifeModel = com.example.domain.brain.PersonalLifeModel.fromUserData(
+                prefs = prefs,
+                familyList = family,
+                routinesList = routines,
+                goalsList = goals,
+                projectsList = projects,
+                memoriesList = memories,
+                accountsList = accounts,
+                vaultList = vaultItems,
+                learnedRoutines = allLearnedRoutines.value,
+                timelineEvents = recentTimelineEvents.value
+            )
+            repository.orchestrator.vybBrain.updateLifeModel(lifeModel)
         }
     }
 
@@ -514,12 +551,34 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             // 1. Dispatch real device intent
             val res = when (action.actionType.uppercase()) {
-                "TRANSPORT_DISPATCH", "RIDE_DISPATCH" -> {
+                "TRANSPORT_DISPATCH", "RIDE_DISPATCH", "OPEN_RIDE_PROVIDER" -> {
+                    val providerName = when {
+                        action.title.contains("Yatri", ignoreCase = true) || action.consequenceSummary.contains("Yatri", ignoreCase = true) -> "Yatri Sathi"
+                        action.title.contains("Rapido", ignoreCase = true) || action.consequenceSummary.contains("Rapido", ignoreCase = true) -> "Rapido"
+                        action.title.contains("Ola", ignoreCase = true) || action.consequenceSummary.contains("Ola", ignoreCase = true) -> "Ola"
+                        action.title.contains("inDrive", ignoreCase = true) || action.consequenceSummary.contains("inDrive", ignoreCase = true) -> "inDrive"
+                        else -> "Uber"
+                    }
                     DeviceAppExecutionBridge.executeRideBooking(
                         context = context,
-                        provider = if (action.consequenceSummary.contains("Yatri", ignoreCase = true)) "Yatri Sathi" else "Uber",
+                        provider = providerName,
                         destination = action.description
                     )
+                }
+                "OPEN_APP" -> {
+                    if (action.title.contains("Amazon", ignoreCase = true) || action.description.contains("Amazon", ignoreCase = true)) {
+                        DeviceAppExecutionBridge.executeShoppingSearch(
+                            context = context,
+                            platform = "Amazon",
+                            searchQuery = ""
+                        )
+                    } else {
+                        DeviceAppExecutionBridge.executeShoppingSearch(
+                            context = context,
+                            platform = "Amazon",
+                            searchQuery = action.description
+                        )
+                    }
                 }
                 "COMMUNICATION_DISPATCH", "WHATSAPP" -> {
                     DeviceAppExecutionBridge.executeWhatsAppMessage(

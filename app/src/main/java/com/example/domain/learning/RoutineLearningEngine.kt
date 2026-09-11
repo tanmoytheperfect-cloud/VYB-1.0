@@ -37,6 +37,7 @@ class RoutineLearningEngine(
         val allEvents = timelineDao.getEventsSince(thirtyDaysAgo)
 
         if (allEvents.isEmpty()) {
+            learnedRoutineDao.clearAllLearnedRoutines()
             return emptyList()
         }
 
@@ -47,13 +48,9 @@ class RoutineLearningEngine(
         
         // Weekday unlocks (Monday to Friday)
         val weekdayUnlocks = unlockEvents.filter { it.dayOfWeek in Calendar.MONDAY..Calendar.FRIDAY }
-        val morningWeekdayUnlocks = weekdayUnlocks.filter {
-            val min = getMinuteOfDay(it.timestamp)
-            min in 300..630 // 05:00 to 10:30
-        }
-        if (morningWeekdayUnlocks.isNotEmpty()) {
-            val stats = computeCircularStats(morningWeekdayUnlocks)
-            val evidenceCount = morningWeekdayUnlocks.size
+        if (weekdayUnlocks.isNotEmpty()) {
+            val stats = computeCircularStats(weekdayUnlocks)
+            val evidenceCount = weekdayUnlocks.size
             val distinctDays = stats.distinctDates.size
             val (status, confidence) = computeStatusAndConfidence(evidenceCount, distinctDays, stats.consistencyScore)
 
@@ -63,7 +60,7 @@ class RoutineLearningEngine(
 
             val routine = LearnedRoutineEntity(
                 routineId = "learned_morning_unlock_weekday",
-                title = "Weekday Morning Device Activity",
+                title = "Weekday Device Activity",
                 description = "Recurring device unlock activity observed around $meanFormatted ($startWindow – $endWindow) on weekdays.",
                 daysOfWeek = "WEEKDAY",
                 dayTypeCategory = "WORKDAY",

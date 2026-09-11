@@ -30,6 +30,11 @@ import com.example.data.model.IntentType
 import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VybViewModel
+import com.example.domain.brain.VybBrainStatus
+import com.example.domain.brain.WhatMattersNowSummary
+import com.example.domain.brain.VybRecommendedAction
+import com.example.domain.brain.LifeBriefing
+import com.example.domain.memory.IntelligentMemoryItem
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -43,6 +48,8 @@ fun HomeScreen(
 ) {
     var inputText by remember { mutableStateOf("") }
     var showVoiceDialog by remember { mutableStateOf(false) }
+    var showLearningDialog by remember { mutableStateOf(false) }
+    var showBriefingDetails by remember { mutableStateOf(false) }
 
     val messages by viewModel.currentMessages.collectAsStateWithLifecycle()
     val currentConv by viewModel.currentConversation.collectAsStateWithLifecycle()
@@ -53,6 +60,10 @@ fun HomeScreen(
     val todayEvents by viewModel.todayTimelineEvents.collectAsStateWithLifecycle()
     val learnedRoutines by viewModel.allLearnedRoutines.collectAsStateWithLifecycle()
     val allMemories by viewModel.allMemories.collectAsStateWithLifecycle()
+    val brainStatus by viewModel.brainStatus.collectAsStateWithLifecycle()
+    val whatMattersNow by viewModel.whatMattersNow.collectAsStateWithLifecycle()
+    val currentBriefing by viewModel.currentBriefing.collectAsStateWithLifecycle()
+    val recommendedActions by viewModel.recommendedActions.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -106,6 +117,120 @@ fun HomeScreen(
                     viewModel.startNewConversation(voiceText) {}
                 }
                 inputText = ""
+            }
+        )
+    }
+
+    if (showLearningDialog) {
+        AlertDialog(
+            onDismissRequest = { showLearningDialog = false },
+            containerColor = Slate900,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Psychology, contentDescription = null, tint = CyanNeon)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("What VYB Has Learned", color = Slate100, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                val learnedMemories: List<IntelligentMemoryItem> = remember { viewModel.vybBrain.memoryEngine.getAllLearnedMemories() }
+                val isLearningPaused: Boolean = remember { viewModel.vybBrain.memoryEngine.isLearningPaused() }
+                var learningPausedState by remember { mutableStateOf(isLearningPaused) }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (learningPausedState) "Continuous Learning: PAUSED" else "Continuous Learning: ACTIVE",
+                            color = if (learningPausedState) AmberNeon else EmeraldNeon,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Switch(
+                            checked = !learningPausedState,
+                            onCheckedChange = { active ->
+                                learningPausedState = !active
+                                viewModel.vybBrain.memoryEngine.setLearningPaused(!active)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = EmeraldNeon,
+                                checkedTrackColor = EmeraldNeon.copy(alpha = 0.3f),
+                                uncheckedThumbColor = Slate400,
+                                uncheckedTrackColor = Slate800
+                            )
+                        )
+                    }
+
+                    Text(
+                        text = "You have complete ownership over VYB's memory. Tap 'Forget' to remove any belief or preference.",
+                        color = Slate400,
+                        fontSize = 11.sp
+                    )
+
+                    HorizontalDivider(color = Slate800)
+
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(learnedMemories) { mem ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Slate950,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Slate800)
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = CyanNeon.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                text = mem.tier.name,
+                                                color = CyanNeon,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+
+                                        TextButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    viewModel.vybBrain.memoryEngine.forgetMemory(mem.subject)
+                                                    viewModel.refreshBrainIntelligence()
+                                                }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("Forget", color = RoseNeon, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(mem.subject, color = Slate100, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(mem.content, color = Slate300, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLearningDialog = false }) {
+                    Text("Close", color = CyanNeon, fontWeight = FontWeight.Bold)
+                }
             }
         )
     }
@@ -167,13 +292,25 @@ fun HomeScreen(
                                     modifier = Modifier
                                         .size(7.dp)
                                         .clip(CircleShape)
-                                        .background(if (isLoading) AmberNeon else EmeraldNeon)
+                                        .background(
+                                            when {
+                                                isLoading -> AmberNeon
+                                                brainStatus == VybBrainStatus.NEEDS_PERMISSION || brainStatus == VybBrainStatus.CANNOT_ACCESS -> RoseNeon
+                                                brainStatus == VybBrainStatus.WAITING -> AmberNeon
+                                                else -> EmeraldNeon
+                                            }
+                                        )
                                 )
                             }
                             Text(
-                                text = if (isLoading) "REASONING & PLANNING..." else if (isSpeaking) "SPEAKING // JARVIS AUDIO" else "PERSONAL AI OPERATING SYSTEM",
+                                text = if (isLoading) "VYB IS REASONING..." else if (isSpeaking) "SPEAKING // JARVIS AUDIO" else brainStatus.label.uppercase(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isLoading) AmberNeon else CyanNeon,
+                                color = when {
+                                    isLoading -> AmberNeon
+                                    brainStatus == VybBrainStatus.NEEDS_PERMISSION || brainStatus == VybBrainStatus.CANNOT_ACCESS -> RoseNeon
+                                    brainStatus == VybBrainStatus.WAITING -> AmberNeon
+                                    else -> CyanNeon
+                                },
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.8.sp
@@ -394,6 +531,219 @@ fun HomeScreen(
                                 Column(modifier = Modifier.padding(8.dp)) {
                                     Text("ROUTINES", color = Slate400, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                                     Text("$learnedRoutinesCount", color = EmeraldNeon, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        // Inspect What VYB Learned Trigger Button
+                        OutlinedButton(
+                            onClick = { showLearningDialog = true },
+                            modifier = Modifier.fillMaxWidth().testTag("inspect_learned_intelligence"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanNeon),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon.copy(alpha = 0.4f)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Inspect What VYB Learned & Memory Controls", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+
+            // WHAT MATTERS NOW - Dynamic Intelligence Anchor
+            item {
+                VybGlowCard(
+                    borderColor = AmberNeon.copy(alpha = 0.6f),
+                    glowColor = AmberGlow
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(AmberNeon.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(imageVector = Icons.Default.Bolt, contentDescription = null, tint = AmberNeon, modifier = Modifier.size(14.dp))
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "WHAT MATTERS NOW",
+                                    color = AmberNeon,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 1.sp
+                                )
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Slate900,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Slate700)
+                            ) {
+                                Text(
+                                    text = "DISCRETIONARY: ${whatMattersNow.financialDiscretionaryRemaining}",
+                                    color = EmeraldNeon,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = whatMattersNow.priorityTitle,
+                            color = Slate100,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = whatMattersNow.priorityDescription,
+                            color = Slate300,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 18.sp
+                        )
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Slate900,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, AmberNeon.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(imageVector = Icons.Default.AssistantPhoto, contentDescription = null, tint = AmberNeon, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = whatMattersNow.recommendedNextStep,
+                                    color = Slate100,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // DAILY INTELLIGENCE BRIEFING CARD (Collapsible)
+            item {
+                VybGlowCard(
+                    borderColor = CyanNeon.copy(alpha = 0.4f),
+                    glowColor = CyanGlow
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showBriefingDetails = !showBriefingDetails },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = currentBriefing.headline,
+                                    color = Slate100,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Icon(
+                                imageVector = if (showBriefingDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = CyanNeon
+                            )
+                        }
+
+                        Text(
+                            text = "Priority: ${currentBriefing.priorityAction}",
+                            color = Slate200,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        if (showBriefingDetails) {
+                            HorizontalDivider(color = Slate800)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                currentBriefing.summaryBullets.forEach { bullet ->
+                                    Text(text = bullet, color = Slate300, fontSize = 11.sp, lineHeight = 16.sp)
+                                }
+                            }
+                            Text(
+                                text = "Financial Snapshot: ${currentBriefing.financialSnapshot}",
+                                color = EmeraldNeon,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ONE-TAP RECOMMENDED ACTIONS
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "RECOMMENDED ACTIONS",
+                        color = Slate400,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        items(recommendedActions) { action ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Slate900,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .clickable {
+                                        if (currentConv != null) {
+                                            viewModel.sendMessage(action.queryToTrigger)
+                                        } else {
+                                            viewModel.startNewConversation(action.queryToTrigger) {}
+                                        }
+                                    }
+                                    .testTag("action_${action.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = when (action.category) {
+                                            "TRANSPORT" -> Icons.Default.DirectionsCar
+                                            "FINANCE" -> Icons.Default.CurrencyRupee
+                                            "SHOPPING" -> Icons.Default.LocalShipping
+                                            else -> Icons.Default.PlayArrow
+                                        },
+                                        contentDescription = null,
+                                        tint = CyanNeon,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = action.label,
+                                        color = Slate100,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
                                 }
                             }
                         }

@@ -7,6 +7,8 @@ import com.example.data.local.dao.TaskDao
 import com.example.data.model.*
 import com.example.data.repository.GeminiRepository
 import com.example.domain.actions.*
+import com.example.domain.agent.AgentEngine
+import com.example.domain.agent.AgentIntentCategory
 import com.example.domain.brain.VybCognitiveBrain
 import com.example.domain.capability.CapabilityEngine
 import com.example.domain.capability.CapabilityState
@@ -46,9 +48,11 @@ class VybOrchestrator(
     private val lifeVaultDao: LifeVaultDao? = null
 ) {
     val cognitiveBrain = VybCognitiveBrain()
+    val vybBrain = com.example.domain.brain.VybBrain(memoryDao, taskDao, lifeVaultDao, geminiRepository = geminiRepository)
     private val contextEngine = ContextEngine(memoryDao, taskDao)
     val actionEngine = ActionEngine(memoryDao, taskDao)
     val personalLifeVaultEngine = lifeVaultDao?.let { PersonalLifeVaultEngine(it) }
+    val agentEngine = AgentEngine(memoryDao, taskDao, lifeVaultDao, geminiRepository = geminiRepository)
 
     suspend fun processMessage(input: String, appContext: Context?): OrchestratorResult {
         val trimmed = input.trim()
@@ -197,6 +201,41 @@ class VybOrchestrator(
                     // Continue with normal orchestration pipeline
                 }
             }
+        }
+
+        // STEP 0: VYB BRAIN INTENT & INTELLIGENCE REASONING
+        val isBrainQuery = lower.contains("priorities today") ||
+                lower.contains("what should i do now") ||
+                lower.contains("what am i forgetting") ||
+                lower.contains("morning briefing") ||
+                lower.contains("good morning") ||
+                lower.contains("evening review") ||
+                lower.contains("good night") ||
+                lower.contains("what did i decide") ||
+                lower.contains("should i buy") ||
+                lower.contains("what should i wear") ||
+                lower.contains("travel next month") ||
+                lower.contains("cheapest") ||
+                lower.contains("book it") ||
+                lower.startsWith("remember that") ||
+                lower.startsWith("forget") ||
+                (lower.contains("amazon") && (lower.contains("delivery") || lower.contains("track") || lower.contains("order") || lower.contains("where") || lower.contains("arrive"))) ||
+                (lower.contains("cab") && (lower.contains("son") || lower.contains("school") || lower.contains("vivaan") || lower.contains("cheapest") || lower.contains("pickup"))) ||
+                lower.contains("can i afford") ||
+                lower.contains("safely spend") ||
+                (lower.contains("extra") && (lower.contains("₹") || lower.contains("rupee") || lower.contains("money") || lower.contains("20,000") || lower.contains("20000")))
+
+        if (isBrainQuery) {
+            val prefs = appContext?.getSharedPreferences("vyb_user_preferences", Context.MODE_PRIVATE)
+            val brainRes = vybBrain.processQuery(input, prefs)
+
+            return OrchestratorResult(
+                conversationalResponse = brainRes.replyText,
+                intentPayload = brainRes.intentPayload,
+                diagnostics = brainRes.diagnostics,
+                action = brainRes.action,
+                operatingState = if (brainRes.action != null) VybOperatingState.WAITING_FOR_AUTHORIZATION else VybOperatingState.SUCCESS
+            )
         }
 
         // STEP 1: PARSE STRUCTURED INTENT
