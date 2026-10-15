@@ -13,3 +13,16 @@ enum class VybOperatingState {
     SUCCESS,
     FAILED
 }
+
+/**
+ * Real-time state machine for Ask VYB runtime lifecycle (Part 14):
+ * IDLE -> SUBMITTING -> THINKING -> RESPONDING -> SUCCESS / ERROR.
+ */
+enum class AskVybState {
+    IDLE,
+    SUBMITTING,
+    THINKING,
+    RESPONDING,
+    SUCCESS,
+    ERROR
+}

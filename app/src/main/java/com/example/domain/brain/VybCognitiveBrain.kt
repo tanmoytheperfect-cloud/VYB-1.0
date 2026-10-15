@@ -150,8 +150,12 @@ class VybCognitiveBrain(
             return CognitiveGoal.TRACK_ORDER_QUERY
         }
 
-        // Goal 5: Daily Priorities / Briefing
-        if (lower.contains("what should i do") || lower.contains("priorities today") || lower.contains("plan for today") || lower.contains("briefing") || lower.contains("what do i have")) {
+        // Goal 5: Daily Priorities / Briefing / Life Context
+        if (lower.contains("what matters today") || lower.contains("what matters now") || lower.contains("what matters") ||
+            lower.contains("what should i do") || lower.contains("what do you know about my day") ||
+            lower.contains("what is my next important thing") || lower.contains("next important thing") ||
+            lower.contains("priorities today") || lower.contains("plan for today") || lower.contains("briefing") ||
+            lower.contains("good morning") || lower.contains("morning briefing") || lower.contains("what do i have")) {
             return CognitiveGoal.DAILY_PRIORITIES_BRIEFING
         }
 
@@ -250,16 +254,28 @@ class VybCognitiveBrain(
             "No family routines scheduled"
         }
 
+        val workSummary = if (worldModel.work.companyName.isNotBlank()) {
+            "${worldModel.work.companyName} (${worldModel.work.role}) — ${worldModel.work.officeAddress}"
+        } else {
+            "Not configured in Personal Life Vault"
+        }
+
+        val financeSummary = if (fc.monthlyIncome > 0) {
+            "Monthly income is $cur${fc.monthlyIncome.toInt()}, with $cur${fc.monthlySavingsTarget.toInt()} dedicated to your savings target and $cur${fc.activeDiscretionaryBuffer.toInt()} in active discretionary buffer."
+        } else {
+            "Financial baseline not configured (figures are kept strictly private on-device)."
+        }
+
         val reply = "Good $timeOfDay, ${owner.title}. Current time is $currentTime.\n\n" +
-                "Here is your executive plan for $dayTitle:\n\n" +
+                "Here is your executive overview for $dayTitle:\n\n" +
                 "1. Family & Routine: $familySummary.\n" +
-                "2. Business / Workplace: ${worldModel.work.companyName} (${worldModel.work.role}) — ${worldModel.work.officeAddress}.\n" +
-                "3. Financial Health: Monthly income is $cur${fc.monthlyIncome.toInt()}, with $cur${fc.monthlySavingsTarget.toInt()} dedicated to your savings target and $cur${fc.activeDiscretionaryBuffer.toInt()} in active discretionary buffer.\n" +
+                "2. Business / Workplace: $workSummary.\n" +
+                "3. Financial Health: $financeSummary\n" +
                 "4. Device App Execution: I require your explicit authorization before launching any connected app or dispatching tasks."
 
         val payload = VybIntentPayload(
             intentType = "BRIEFING",
-            title = "Executive Plan: $dayTitle",
+            title = "Executive Overview: $dayTitle",
             summary = "Personalized schedule, family, and financial overview ($currentTime)",
             briefingPlan = DailyBriefingPayload(
                 greeting = "Good $timeOfDay, ${owner.title} ($currentTime)",
@@ -267,10 +283,10 @@ class VybCognitiveBrain(
                 weatherSummary = "${owner.city} • Clear & Active • $currentTime",
                 sonSchoolTransportTime = familySummary,
                 transportStatus = "Cab dispatch ready",
-                workPriorities = listOf("${worldModel.work.companyName} review", "Coordinate tasks & approvals"),
+                workPriorities = if (worldModel.work.companyName.isNotBlank()) listOf("${worldModel.work.companyName} review", "Coordinate tasks & approvals") else listOf("Coordinate daily tasks & approvals"),
                 discretionaryBudgetInr = fc.activeDiscretionaryBuffer,
-                pendingShoppingCount = 1,
-                personalGoalsSummary = "Savings Target: $cur${fc.monthlySavingsTarget.toInt()} protected",
+                pendingShoppingCount = 0,
+                personalGoalsSummary = if (fc.monthlySavingsTarget > 0) "Savings Target: $cur${fc.monthlySavingsTarget.toInt()} protected" else "No active savings target set",
                 proactiveVybSuggestion = "Review upcoming schedule and approve pending dispatches."
             ),
             suggestedFollowUps = listOf("Book cab for family", "Send WhatsApp update", "How much can I spend this month?")
@@ -722,18 +738,97 @@ class VybCognitiveBrain(
         }
 
         val owner = worldModel.owner
-        val reply = "Understood, ${owner.title}. How can I assist you with your schedule, transport, finances, family routines, or mobile apps today?"
+        val learnedPrefs = worldModel.learnedPreferences
+        val family = worldModel.family.members
+        val routines = worldModel.routines
+        val projects = worldModel.activeProjects
+        val finance = worldModel.finance
+        val turns = memoryEngine.getRecentTurns()
+
+        val lower = raw.lowercase()
+        val isRecallQuery = lower.contains("remember") || lower.contains("recall") ||
+                lower.contains("what do you know") || lower.contains("tell me what you know") ||
+                lower.contains("what do you have") || lower.contains("what did i tell you")
+
+        val categorySections = mutableListOf<String>()
+        var totalRecords = 0
+
+        // 1. IDENTITY
+        if (owner.name.isNotBlank() && owner.name != "Owner") {
+            val roleStr = if (owner.jobTitle.isNotBlank() || owner.companyName.isNotBlank()) " — ${owner.jobTitle.ifBlank { "Executive" }} at ${owner.companyName.ifBlank { "Company" }}" else ""
+            categorySections.add("### 👤 IDENTITY\n• Name: ${owner.name}$roleStr")
+            totalRecords++
+        }
+
+        // 2. FAMILY
+        if (family.isNotEmpty()) {
+            val lines = family.map { "• ${it.name} (${it.relation}): ${it.notes.ifBlank { "Family Member" }}" }
+            categorySections.add("### 👨‍👩‍👧‍👦 FAMILY\n" + lines.joinToString("\n"))
+            totalRecords += family.size
+        }
+
+        // 3. ROUTINES
+        if (routines.isNotEmpty()) {
+            val lines = routines.take(4).map { "• ${it.timeOfDay}: ${it.title} (${it.days})" }
+            categorySections.add("### ⏰ ROUTINES\n" + lines.joinToString("\n"))
+            totalRecords += routines.size
+        }
+
+        // 4. PROJECTS
+        if (projects.isNotEmpty()) {
+            val lines = projects.take(4).map { "• ${it.name} [${it.currentPhase}]" }
+            categorySections.add("### 🚀 PROJECTS & WORK\n" + lines.joinToString("\n"))
+            totalRecords += projects.size
+        }
+
+        // 5. FINANCE
+        if (finance.monthlyIncome > 0) {
+            categorySections.add("### 💰 FINANCE\n• Monthly Income: ${finance.currencySymbol}${finance.monthlyIncome.toInt()} | Savings Target: ${finance.currencySymbol}${finance.monthlySavingsTarget.toInt()}")
+            totalRecords++
+        }
+
+        // 6. PREFERENCES & MEMORY
+        if (learnedPrefs.isNotEmpty()) {
+            val lines = learnedPrefs.take(6).map { "• ${it.preference} *[${it.category}]*" }
+            categorySections.add("### ⭐ PREFERENCES & MEMORIES\n" + lines.joinToString("\n"))
+            totalRecords += learnedPrefs.size
+        }
+
+        val hasData = totalRecords > 0
+        val reply: String
+        val cardSummary: String
+
+        if (lower.contains("just tell") || lower.contains("last tell")) {
+            val latestTurn = turns.lastOrNull { it.role == "USER" }
+            if (latestTurn != null) {
+                reply = "In our current conversation, you recently said: \"${latestTurn.message}\" [Conversation Context - Current Session]"
+                cardSummary = "Recent conversational context retrieved"
+            } else {
+                reply = "I don't have any recent statements recorded in our current conversation session."
+                cardSummary = "No recent conversation statements"
+            }
+        } else if (hasData) {
+            val sb = StringBuilder("Here is what I have stored in your Personal Memory:\n\n")
+            sb.append(categorySections.joinToString("\n\n"))
+            sb.append("\n\n*[Storage: LOCAL ON-DEVICE ONLY • Verified via Room Database]*")
+            reply = sb.toString().trim()
+            cardSummary = "$totalRecords records available across ${categorySections.size} categories"
+        } else {
+            reply = "I don't currently have any saved personal memories I can confidently recall. No personal vault facts, routines, or profile details are stored yet. You can teach me by saying 'Remember that...' or configuring your profile."
+            cardSummary = "Unconfigured (0 memories stored)"
+        }
+
         val payload = VybIntentPayload(
             intentType = "GENERAL",
-            title = "VYB Executive PA",
-            summary = "Ready to assist ${owner.title}",
-            suggestedFollowUps = listOf("What are my priorities today?", "Book cab for family", "How much can I spend this month?")
+            title = "Personal Life Context",
+            summary = cardSummary,
+            suggestedFollowUps = if (hasData) listOf("What matters today?", "What else do you remember?", "Add a task") else listOf("Remember that...", "Set up profile", "Add a task")
         )
         return CognitiveCognitionResult(
-            understoodGoal = "GENERAL_CONVERSATION",
+            understoodGoal = if (isRecallQuery) "MEMORY_RECALL" else "GENERAL_CONVERSATION",
             executiveReply = reply,
             intentPayload = payload,
-            retainedContext = listOf("Owner: ${owner.name}")
+            retainedContext = listOf("Records Available: $totalRecords")
         )
     }
 }

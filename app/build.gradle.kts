@@ -17,10 +17,14 @@ android {
     applicationId = "com.aistudio.vyb.kxpzqa"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.0.2-S23-TRACE"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val currentBuildMillis = 1760000000000L
+    buildConfigField("long", "BUILD_TIMESTAMP", "${currentBuildMillis}L")
+    buildConfigField("String", "BUILD_TIME_PRETTY", "\"2026-10-09 08:45 UTC (Build #2)\"")
   }
 
   signingConfigs {
@@ -98,9 +102,9 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
@@ -110,7 +114,6 @@ dependencies {
   // implementation(libs.androidx.credentials)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

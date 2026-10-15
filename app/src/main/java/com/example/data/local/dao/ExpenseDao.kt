@@ -13,6 +13,9 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses ORDER BY timestamp DESC")
     fun getAllExpenses(): Flow<List<ExpenseEntity>>
 
+    @Query("SELECT * FROM expenses ORDER BY timestamp DESC")
+    suspend fun getAllExpensesDirect(): List<ExpenseEntity>
+
     @Query("SELECT * FROM expenses WHERE conversationId = :conversationId ORDER BY timestamp DESC")
     fun getExpensesForConversation(conversationId: Long): Flow<List<ExpenseEntity>>
 

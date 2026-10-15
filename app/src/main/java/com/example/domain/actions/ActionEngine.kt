@@ -24,7 +24,8 @@ import kotlinx.coroutines.withContext
  */
 class ActionEngine(
     private val memoryDao: MemoryDao? = null,
-    private val taskDao: TaskDao? = null
+    private val taskDao: TaskDao? = null,
+    private val lifeVaultDao: com.example.data.local.dao.LifeVaultDao? = null
 ) {
     companion object {
         private const val TAG = "ActionEngine"
@@ -74,6 +75,11 @@ class ActionEngine(
                 StructuredIntent.INTENT_WEB_SEARCH -> executeWebSearch(intent, appContext)
                 StructuredIntent.INTENT_OPEN_RIDE_PROVIDER -> executeOpenRideProvider(intent, appContext)
                 StructuredIntent.INTENT_BOOK_RIDE, StructuredIntent.INTENT_BOOK_TRANSPORT -> executeBookRide(intent)
+                StructuredIntent.INTENT_UPDATE_HOME_SCREEN -> ActionResult(
+                    success = true,
+                    action = StructuredIntent.INTENT_UPDATE_HOME_SCREEN,
+                    message = "Home screen layout updated."
+                )
                 else -> ActionResult(
                     success = true,
                     action = intent.intent,
@@ -126,9 +132,87 @@ class ActionEngine(
     // 2. REAL MEMORY RETRIEVAL
     private suspend fun executeRetrieveMemory(intent: StructuredIntent): ActionResult {
         val query = (intent.entities["query"] as? String) ?: intent.rawPrompt
+        val lowerQuery = query.lowercase()
 
-        if (memoryDao != null) {
-            val directMatches = memoryDao.searchMemoriesDirect(query)
+        if (memoryDao != null || lifeVaultDao != null) {
+            val allMemories = (memoryDao?.getAllMemoriesDirect() ?: emptyList()).toMutableList()
+            lifeVaultDao?.getAllVaultItems()?.forEach { vaultItem ->
+                allMemories.add(
+                    MemoryItemEntity(
+                        category = vaultItem.category,
+                        key = vaultItem.key,
+                        value = vaultItem.value,
+                        source = "Personal Life Vault",
+                        confidence = 1.0,
+                        isEditable = true,
+                        timestamp = vaultItem.updatedAt
+                    )
+                )
+            }
+
+            if (query == "recent" || lowerQuery.contains("just tell") || lowerQuery.contains("last tell") || lowerQuery.contains("tell you")) {
+                val latest = allMemories.maxByOrNull { it.timestamp }
+                if (latest != null) {
+                    return ActionResult(
+                        success = true,
+                        action = StructuredIntent.INTENT_RETRIEVE_MEMORY,
+                        message = "You recently told me: ${latest.key} — \"${latest.value}\".",
+                        data = listOf(latest)
+                    )
+                } else {
+                    return ActionResult(
+                        success = true,
+                        action = StructuredIntent.INTENT_RETRIEVE_MEMORY,
+                        message = "I don't have any recently stored statements in memory.",
+                        data = emptyList<MemoryItemEntity>()
+                    )
+                }
+            }
+
+            val isBroadRecall = query == "ALL_CATEGORIES" ||
+                    lowerQuery.contains("what else do you remember") ||
+                    lowerQuery.contains("what do you remember") ||
+                    lowerQuery.contains("tell me what you remember") ||
+                    lowerQuery.contains("what have you remembered") ||
+                    lowerQuery.contains("what do you recall") ||
+                    lowerQuery.contains("do you remember anything else") ||
+                    lowerQuery.contains("what do you know")
+
+            if (isBroadRecall) {
+                if (allMemories.isEmpty()) {
+                    return ActionResult(
+                        success = true,
+                        action = StructuredIntent.INTENT_RETRIEVE_MEMORY,
+                        message = "I don't currently have any saved personal memories I can confidently recall. No personal vault facts, routines, or profile details are stored yet. You can teach me by saying 'Remember that...' or configuring your profile.",
+                        data = emptyList<MemoryItemEntity>()
+                    )
+                }
+
+                val sorted = allMemories.sortedByDescending { it.timestamp }
+                val sb = StringBuilder("Here is what I have stored in your Personal Memory:\n")
+                val byCategory = sorted.groupBy { it.category }
+                byCategory.forEach { (cat, items) ->
+                    sb.appendLine("\n### 📂 $cat")
+                    items.take(4).forEach { item ->
+                        sb.appendLine("• **${item.key}**: ${item.value}")
+                    }
+                }
+                sb.append("\n*[Storage: LOCAL ON-DEVICE ONLY • Verified via Room Database]*")
+                return ActionResult(
+                    success = true,
+                    action = StructuredIntent.INTENT_RETRIEVE_MEMORY,
+                    message = sb.toString().trim(),
+                    data = sorted
+                )
+            }
+
+            // Sort by timestamp descending so newer corrections take precedence!
+            val sorted = allMemories.sortedByDescending { it.timestamp }
+            val directMatches = sorted.filter {
+                it.key.contains(query, ignoreCase = true) ||
+                it.value.contains(query, ignoreCase = true) ||
+                it.category.contains(query, ignoreCase = true)
+            }
             if (directMatches.isNotEmpty()) {
                 val top = directMatches.first()
                 return ActionResult(
@@ -139,15 +223,13 @@ class ActionEngine(
                 )
             }
 
-            // Fallback: check all memories for keyword inclusion
-            val allMemories = memoryDao.getAllMemoriesDirect()
-            val lowerQuery = query.lowercase()
-            val match = allMemories.firstOrNull {
+            // Fallback: check all memories for keyword inclusion (sorted by timestamp descending)
+            val match = sorted.firstOrNull {
                 it.key.lowercase().contains(lowerQuery) ||
                 it.value.lowercase().contains(lowerQuery) ||
-                (lowerQuery.contains("school") && it.key.lowercase().contains("school")) ||
-                (lowerQuery.contains("school") && it.value.lowercase().contains("school")) ||
-                (lowerQuery.contains("son") && it.value.lowercase().contains("son"))
+                (lowerQuery.contains("school") && (it.key.lowercase().contains("school") || it.value.lowercase().contains("school"))) ||
+                (lowerQuery.contains("son") && (it.key.lowercase().contains("son") || it.value.lowercase().contains("son"))) ||
+                (lowerQuery.contains("office") && (it.key.lowercase().contains("office") || it.value.lowercase().contains("office") || it.key.lowercase().contains("work")))
             }
 
             if (match != null) {
@@ -336,10 +418,11 @@ class ActionEngine(
             }
         }
 
+        val isAlarm = intent.intent == StructuredIntent.INTENT_SET_ALARM
         return ActionResult(
             success = true,
-            action = StructuredIntent.INTENT_CREATE_REMINDER,
-            message = "Created reminder for \"$title\" at $timeStr."
+            action = if (isAlarm) StructuredIntent.INTENT_SET_ALARM else StructuredIntent.INTENT_CREATE_REMINDER,
+            message = if (isAlarm) "Alarm set for ${String.format(java.util.Locale.ROOT, "%02d:%02d", hour, minute)}." else "Created reminder for \"$title\" at $timeStr."
         )
     }
 

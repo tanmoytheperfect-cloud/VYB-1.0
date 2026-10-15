@@ -9,6 +9,9 @@ interface FamilyDao {
     @Query("SELECT * FROM family_members ORDER BY id ASC")
     fun getAllFamilyMembers(): Flow<List<FamilyMemberEntity>>
 
+    @Query("SELECT * FROM family_members ORDER BY id ASC")
+    suspend fun getAllFamilyMembersDirect(): List<FamilyMemberEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFamilyMember(member: FamilyMemberEntity): Long
 

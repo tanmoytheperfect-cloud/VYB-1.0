@@ -9,6 +9,9 @@ interface RoutineDao {
     @Query("SELECT * FROM routines ORDER BY timeOfDay ASC")
     fun getAllRoutines(): Flow<List<RoutineEntity>>
 
+    @Query("SELECT * FROM routines ORDER BY timeOfDay ASC")
+    suspend fun getAllRoutinesDirect(): List<RoutineEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRoutine(routine: RoutineEntity): Long
 

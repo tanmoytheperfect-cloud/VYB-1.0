@@ -12,6 +12,31 @@ object IntentParser {
         val trimmed = input.trim()
         val lower = trimmed.lowercase(Locale.ROOT)
 
+        // 0. Check for Personal Knowledge Query ("what do you know about me", "tell me about myself", etc.)
+        if (lower.contains("about me") || lower.contains("about myself") || lower.contains("who am i") ||
+            lower == "what do you know" || lower.startsWith("what do you know about me")) {
+            return StructuredIntent(
+                intent = StructuredIntent.INTENT_RETRIEVE_MEMORY,
+                entities = mapOf("query" to "personal_knowledge", "category" to "ALL"),
+                rawPrompt = trimmed,
+                requiresAuthorization = false
+            )
+        }
+
+        // 0b. Check for What Matters Today / Priorities / Daily Reasoning Intent
+        if (lower.contains("what matters today") || lower.contains("what matters now") || lower.contains("what matters") ||
+            lower.contains("what should i do") || lower.contains("what do you know about my day") ||
+            lower.contains("what is my next important thing") || lower.contains("next important thing") ||
+            lower.contains("what's my next") || lower.contains("what are my priorities") ||
+            lower.contains("priorities today") || lower.contains("plan for today") || lower.contains("daily briefing") ||
+            lower.contains("good morning") || lower.contains("morning briefing") || lower.contains("what do i have")) {
+            return StructuredIntent(
+                intent = StructuredIntent.INTENT_WHAT_MATTERS_TODAY,
+                rawPrompt = trimmed,
+                requiresAuthorization = false
+            )
+        }
+
         // 1. Check for Memory Storage Intent ("Remember that...", "Note that...", "Save fact...")
         if (lower.startsWith("remember") || lower.startsWith("note that") || lower.startsWith("save to memory") || lower.startsWith("keep in mind")) {
             val content = trimmed
@@ -58,21 +83,36 @@ object IntentParser {
             )
         }
 
-        // 2. Check for Memory Retrieval Intent ("What time does my son's school start?", "Where do I work?", "What do you remember...")
-        if (lower.startsWith("what time does") || lower.startsWith("when does") || lower.startsWith("what is my") || lower.startsWith("what did i say") || lower.contains("what do you remember") || (lower.contains("school") && (lower.contains("time") || lower.contains("start")))) {
+        // 2. Check for Memory Retrieval Intent ("What did I just tell you?", "What else do you remember?", "What time does my son's school start?", "Where do I work?", "What do you remember...")
+        if (lower.contains("just tell") || lower.contains("last tell") || lower.contains("tell you") ||
+            lower.contains("remember") || lower.contains("recall") ||
+            lower.startsWith("what time does") || lower.startsWith("when does") ||
+            lower.startsWith("what is my") || lower.startsWith("what did i say") ||
+            lower.contains("what do you know") || lower.contains("tell me what you know") ||
+            (lower.contains("school") && (lower.contains("time") || lower.contains("start")))) {
+
+            val isGeneralRecall = lower == "what else do you remember" || lower == "what do you remember" ||
+                    lower == "what do you remember about me" || lower.contains("what else do you remember") ||
+                    lower.contains("do you remember anything else") || lower == "tell me what you remember" ||
+                    lower == "what have you remembered" || lower == "what do you recall" ||
+                    lower == "what else do you know" || lower == "what do you know"
+
             val query = when {
+                lower.contains("just tell") || lower.contains("last tell") || lower.contains("tell you") -> "recent"
+                isGeneralRecall -> "ALL_CATEGORIES"
                 lower.contains("school") -> "school"
                 lower.contains("son") -> "son"
                 lower.contains("work") || lower.contains("office") -> "office"
                 lower.contains("budget") || lower.contains("savings") -> "savings"
-                else -> trimmed.replaceFirst("(?i)^what\\s*(is|time|do|did)\\s*".toRegex(), "").trim()
+                else -> trimmed.replaceFirst("(?i)^what\\s*(is|time|do|did|else)\\s*".toRegex(), "").trim()
             }
 
             return StructuredIntent(
                 intent = StructuredIntent.INTENT_RETRIEVE_MEMORY,
                 entities = mapOf(
                     "query" to query,
-                    "rawQuery" to trimmed
+                    "rawQuery" to trimmed,
+                    "isGeneralRecall" to isGeneralRecall.toString()
                 ),
                 rawPrompt = trimmed,
                 requiresAuthorization = false
@@ -396,10 +436,24 @@ object IntentParser {
             )
         }
 
-        // 14. Check for Daily Briefing
-        if (lower.contains("priorities today") || lower.contains("briefing") || lower.contains("plan for today") || lower.contains("what do i have")) {
+        // 14. Check for Home Screen Update / Customization
+        if (lower.contains("update home screen") || lower.contains("change home screen") || lower.contains("change vyb's home screen") || lower.contains("refresh home screen")) {
             return StructuredIntent(
-                intent = StructuredIntent.INTENT_DAILY_BRIEFING,
+                intent = StructuredIntent.INTENT_UPDATE_HOME_SCREEN,
+                rawPrompt = trimmed,
+                requiresAuthorization = false
+            )
+        }
+
+        // 15. Check for What Matters Today / Life Context / Reasoning Intent
+        if (lower.contains("what matters today") || lower.contains("what matters now") || lower.contains("what matters") ||
+            lower.contains("what should i do") || lower.contains("what do you know about my day") ||
+            lower.contains("what is my next important thing") || lower.contains("next important thing") ||
+            lower.contains("what's my next") || lower.contains("what are my priorities") ||
+            lower.contains("priorities today") || lower.contains("plan for today") || lower.contains("daily briefing") ||
+            lower.contains("good morning") || lower.contains("morning briefing") || lower.contains("what do i have")) {
+            return StructuredIntent(
+                intent = StructuredIntent.INTENT_WHAT_MATTERS_TODAY,
                 rawPrompt = trimmed,
                 requiresAuthorization = false
             )

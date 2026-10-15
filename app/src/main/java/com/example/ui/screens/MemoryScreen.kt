@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.*
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,15 +44,19 @@ fun MemoryScreen(
     viewModel: VybViewModel
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val ownerName by viewModel.ownerName.collectAsStateWithLifecycle()
     val vaultItems by viewModel.allVaultItems.collectAsStateWithLifecycle()
     val pendingConflicts by viewModel.pendingVaultConflicts.collectAsStateWithLifecycle()
     val learnedRoutines by viewModel.allLearnedRoutines.collectAsStateWithLifecycle()
+    val candidatePatterns by viewModel.allCandidatePatterns.collectAsStateWithLifecycle()
     val timelineEvents by viewModel.recentTimelineEvents.collectAsStateWithLifecycle()
     val dailyReflections by viewModel.allDailyReflections.collectAsStateWithLifecycle()
     val weeklyPatterns by viewModel.allWeeklyPatterns.collectAsStateWithLifecycle()
     val currentCtx by viewModel.currentContext.collectAsStateWithLifecycle()
     val learningSettings by viewModel.learningSettings.collectAsStateWithLifecycle()
+    val isLocalOnlyMode by viewModel.isLocalOnlyMode.collectAsStateWithLifecycle()
+    val privacyAuditLog by viewModel.privacyAuditLog.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Personal Life Vault", "Learned Routines", "Daily Timeline", "Reflections & Shifts", "Privacy & Control")
@@ -67,6 +73,41 @@ fun MemoryScreen(
     var showClearTimelineDialog by remember { mutableStateOf(false) }
     var showResetRoutinesDialog by remember { mutableStateOf(false) }
     var showFactoryResetDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
+    var diagnosticsData by remember { mutableStateOf<com.example.domain.persistence.PersistenceDiagnosticSnapshot?>(null) }
+
+    // Dialog: Persistence Diagnostics
+    if (showDiagnosticsDialog && diagnosticsData != null) {
+        val diag = diagnosticsData!!
+        AlertDialog(
+            onDismissRequest = { showDiagnosticsDialog = false },
+            title = { Text("Owner Persistence Diagnostics", color = CyanNeon, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("AUTHENTICATED OWNER: ${if (diag.isAuthenticated) "AUTHENTICATED" else "UNAUTHENTICATED / GUEST"}", color = if (diag.isAuthenticated) EmeraldNeon else CrimsonNeon, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("STABLE OWNER ID: ${diag.ownerId}", color = Slate100, fontSize = 11.sp)
+                    Text("LOCAL FACT COUNT: ${diag.localVaultCount} facts", color = Slate300, fontSize = 11.sp)
+                    Text("DURABLE FACT COUNT: ${diag.durableFactCount} facts", color = Slate300, fontSize = 11.sp)
+                    Text("LAST DURABLE SNAPSHOT: ${diag.lastSnapshotFormatted}", color = Slate300, fontSize = 11.sp)
+                    Text("SCHEMA VERSION: v${diag.stateVersion}", color = Slate300, fontSize = 11.sp)
+                    Text("INTEGRITY STATUS: ${diag.integrityStatus}", color = if (diag.integrityStatus.startsWith("VALID")) EmeraldNeon else AmberNeon, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("SYNC / STORAGE STATUS: ${diag.syncStatus.name}", color = CyanNeon, fontSize = 11.sp)
+                    Text("RESTORE STATUS: ${diag.restoreStatus}", color = Slate300, fontSize = 11.sp)
+                    HorizontalDivider(color = Slate700)
+                    Text("ARCHITECTURE LAYER TRUTH:\n${diag.storageArchitectureBreakdown}", color = Slate400, fontSize = 10.sp, lineHeight = 14.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showDiagnosticsDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = Slate950)
+                ) {
+                    Text("Dismiss")
+                }
+            },
+            containerColor = Slate900
+        )
+    }
 
     // Dialog: Factory Reset
     if (showFactoryResetDialog) {
@@ -437,6 +478,17 @@ fun MemoryScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
+                            }
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        diagnosticsData = viewModel.getPersistenceDiagnostics()
+                                        showDiagnosticsDialog = true
+                                    }
+                                },
+                                modifier = Modifier.size(28.dp).testTag("persistence_diagnostics_button")
+                            ) {
+                                Icon(Icons.Default.Info, contentDescription = "Persistence Diagnostics", tint = CyanNeon, modifier = Modifier.size(16.dp))
                             }
                         }
 
@@ -815,6 +867,131 @@ fun MemoryScreen(
                             )
                         }
                     }
+
+                    if (candidatePatterns.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "COGNITIVE CANDIDATE PATTERNS (${candidatePatterns.size})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyanNeon,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            )
+                        }
+
+                        items(candidatePatterns, key = { it.patternId }) { pattern ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Slate900,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("candidate_pattern_${pattern.patternId}")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = pattern.title,
+                                                color = Slate100,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                            Text(
+                                                text = "${pattern.subject} • ${pattern.domain}",
+                                                color = Slate400,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            val statusColor = when (pattern.status) {
+                                                "ESTABLISHED" -> EmeraldNeon
+                                                "EMERGING" -> CyanNeon
+                                                else -> VioletNeon
+                                            }
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = statusColor.copy(alpha = 0.15f),
+                                                border = androidx.compose.foundation.BorderStroke(0.5.dp, statusColor)
+                                            ) {
+                                                Text(
+                                                    text = pattern.status,
+                                                    color = statusColor,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = if (pattern.isUserConfirmed) EmeraldNeon.copy(alpha = 0.15f) else Slate800,
+                                                border = androidx.compose.foundation.BorderStroke(0.5.dp, if (pattern.isUserConfirmed) EmeraldNeon else Slate700)
+                                            ) {
+                                                Text(
+                                                    text = if (pattern.isUserConfirmed) "CONFIRMED" else "LEARNED",
+                                                    color = if (pattern.isUserConfirmed) EmeraldNeon else Slate300,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Text(
+                                        text = pattern.description,
+                                        color = Slate300,
+                                        fontSize = 11.sp,
+                                        lineHeight = 16.sp
+                                    )
+
+                                    Text(
+                                        text = pattern.explanation,
+                                        color = Slate400,
+                                        fontSize = 10.sp,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Evidence: ${pattern.evidenceCount} observations (${(pattern.confidence * 100).toInt()}% conf)",
+                                            color = Slate400,
+                                            fontSize = 10.sp
+                                        )
+
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.deleteCandidatePattern(pattern.patternId)
+                                                Toast.makeText(context, "Pattern deleted", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(28.dp).testTag("delete_pattern_${pattern.patternId}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteOutline,
+                                                contentDescription = "Delete Pattern",
+                                                tint = CrimsonNeon,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 2 -> {
@@ -993,6 +1170,203 @@ fun MemoryScreen(
 
                 4 -> {
                     // TAB 4: PRIVACY & CONTROL
+
+                    // 1. FLUID OS LOCAL-ONLY MODE CARD
+                    item {
+                        VybGlowCard(
+                            borderColor = if (isLocalOnlyMode) AmberNeon else CyanNeon.copy(alpha = 0.5f),
+                            glowColor = if (isLocalOnlyMode) AmberGlow else CyanGlow
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Icon(
+                                            imageVector = if (isLocalOnlyMode) Icons.Default.Shield else Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = if (isLocalOnlyMode) AmberNeon else CyanNeon,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Text(
+                                            text = "LOCAL-ONLY MODE (ZERO CLOUD EGRESS)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isLocalOnlyMode) AmberNeon else CyanNeon,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                    Switch(
+                                        checked = isLocalOnlyMode,
+                                        onCheckedChange = { enabled ->
+                                            viewModel.setLocalOnlyMode(enabled)
+                                        },
+                                        modifier = Modifier.testTag("local_only_mode_switch"),
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = AmberNeon,
+                                            checkedTrackColor = AmberNeon.copy(alpha = 0.3f),
+                                            uncheckedThumbColor = Slate400,
+                                            uncheckedTrackColor = Slate800
+                                        )
+                                    )
+                                }
+
+                                Text(
+                                    text = if (isLocalOnlyMode) {
+                                        "ACTIVE: Outbound network transfers are strictly blocked by Fluid Privacy Firewall. Gemini cloud reasoning and external API calls are disabled. Fluid OS operates 100% locally on-device. Note: Cellular and Wi-Fi remain available for your other installed Android apps."
+                                    } else {
+                                        "INACTIVE (HYBRID MODE): Fluid OS requires fresh, explicit human approval before any outbound transfer of personal context. When a cloud reasoning request is proposed, you can inspect, redact, or reject the transfer."
+                                    },
+                                    color = Slate300,
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp
+                                )
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isLocalOnlyMode) AmberNeon.copy(alpha = 0.1f) else Slate950,
+                                    border = BorderStroke(1.dp, if (isLocalOnlyMode) AmberNeon.copy(alpha = 0.4f) else Slate800),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isLocalOnlyMode) AmberNeon else EmeraldNeon)
+                                        )
+                                        Text(
+                                            text = if (isLocalOnlyMode) "Policy: STRICT ON-DEVICE ONLY" else "Policy: FIREWALL GATED TRANSFERS",
+                                            color = if (isLocalOnlyMode) AmberNeon else EmeraldNeon,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. FLUID PRIVACY FIREWALL OUTBOUND AUDIT LEDGER
+                    item {
+                        VybGlowCard(
+                            borderColor = VioletNeon.copy(alpha = 0.5f),
+                            glowColor = VioletGlow
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Default.HistoryEdu, contentDescription = null, tint = VioletNeon, modifier = Modifier.size(18.dp))
+                                        Text(
+                                            text = "OUTBOUND AUDIT LEDGER (${privacyAuditLog.size})",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = VioletNeon,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = "SHA-256 HASH VERIFIED",
+                                        color = Slate400,
+                                        fontSize = 9.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                }
+
+                                Text(
+                                    text = "Every transfer attempt is logged below with its cryptographic SHA-256 hash. Raw sensitive payloads are never retained in the ledger.",
+                                    color = Slate400,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+
+                                if (privacyAuditLog.isEmpty()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Slate950,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "No outbound transfers recorded yet. The firewall has prevented unapproved network egress.",
+                                            color = Slate400,
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(12.dp)
+                                        )
+                                    }
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        privacyAuditLog.take(10).forEach { record ->
+                                            val outcomeColor = when (record.outcome) {
+                                                com.example.domain.privacy.AuditOutcome.AUTHORIZED_AND_CONSUMED -> EmeraldNeon
+                                                com.example.domain.privacy.AuditOutcome.BLOCKED_LOCAL_ONLY_MODE -> AmberNeon
+                                                com.example.domain.privacy.AuditOutcome.DENIED_BY_USER,
+                                                com.example.domain.privacy.AuditOutcome.CANCELLED_BY_USER -> Slate400
+                                                else -> CrimsonNeon
+                                            }
+
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = Slate950,
+                                                border = BorderStroke(0.5.dp, CardBorder),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = record.outcome.name,
+                                                            color = outcomeColor,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                        Text(
+                                                            text = record.destinationName,
+                                                            color = Slate200,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = "Purpose: ${record.purpose}",
+                                                        color = Slate300,
+                                                        fontSize = 11.sp
+                                                    )
+                                                    Text(
+                                                        text = "SHA: ${record.payloadSha256.take(16)}... • ${record.destinationEndpoint}",
+                                                        color = Slate400,
+                                                        fontSize = 9.sp,
+                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                                    )
+                                                    if (record.note.isNotBlank()) {
+                                                        Text(
+                                                            text = "Note: ${record.note}",
+                                                            color = Slate400,
+                                                            fontSize = 10.sp
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. OBSERVATION & LEARNING CONTROLS
                     item {
                         VybGlowCard(
                             borderColor = EmeraldNeon.copy(alpha = 0.5f),

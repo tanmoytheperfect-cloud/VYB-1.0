@@ -19,6 +19,8 @@ import com.example.domain.brain.WhatMattersNowSummary
 import com.example.domain.brain.VybRecommendedAction
 import com.example.domain.brain.LifeBriefing
 import com.example.domain.context.*
+import com.example.domain.genesis.*
+import com.example.domain.intelligence.*
 import com.example.domain.learning.*
 import com.example.domain.permission.*
 import com.example.domain.proactive.*
@@ -27,6 +29,15 @@ import com.example.util.DeviceAppExecutionBridge
 import com.example.util.JarvisCoreManager
 import com.example.util.JarvisLocationTelemetry
 import com.example.util.JarvisSystemTelemetry
+import com.example.domain.cognitive.VybCognitiveEngine
+import com.example.domain.cognitive.models.*
+import com.example.domain.environment.VybLivingEnvironmentEngine
+import com.example.domain.environment.model.*
+import com.example.domain.persistence.*
+import com.example.domain.state.AskVybState
+import com.example.domain.temporal.VybTimeOfDay
+import android.util.Log
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -34,19 +45,108 @@ import java.util.*
 
 class VybViewModel(application: Application) : AndroidViewModel(application) {
 
+    val viewModelIdentity = "VybViewModel@${Integer.toHexString(System.identityHashCode(this))}"
+    val viewModelCreationTime = System.currentTimeMillis()
+
     private val database = AppDatabase.getDatabase(application)
     val repository = VybRepository(database)
     private val prefs = application.getSharedPreferences("vyb_owner_prefs", Context.MODE_PRIVATE)
+
+    // Durable Cloud & Persistence Layer
+    val persistenceEngine = VybCloudPersistenceEngine(application)
+    val startupCoordinator = VybStartupCoordinator(application, database, persistenceEngine)
+    val startupStatus: StateFlow<StartupStatusReport> = startupCoordinator.status
 
     // Permission Manager & Observer
     val permissionManager = VybPermissionManager(application)
     val deviceObserver = VybDeviceObserver(
         context = application,
-        timelineDao = database.timelineDao(),
+        database = database,
+        cognitiveEngine = repository.cognitiveEngine,
         permissionManager = permissionManager
     )
+    val backgroundAwarenessReport: StateFlow<com.example.domain.observer.BackgroundAwarenessReport> = deviceObserver.awarenessReport
 
-    // Personal AI OS Engines
+    fun triggerUsageReconciliation() {
+        viewModelScope.launch {
+            deviceObserver.reconcileUsageEvents()
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    // Living Environment & Activity Telemetry Engine
+    val livingEnvironmentEngine = VybLivingEnvironmentEngine(application, repository.cognitiveEngine)
+    val livingSignals: StateFlow<LivingSignals> = livingEnvironmentEngine.signals
+
+    // Canonical Current Life State (Unified Reality: Telemetry + Context + Brain)
+    val currentLifeState: StateFlow<CurrentLifeState> = repository.cognitiveEngine.lifeContextEngine.currentLifeState
+
+    val allCandidatePatterns = database.candidatePatternDao().getAllPatternsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun deleteCandidatePattern(patternId: String) {
+        viewModelScope.launch {
+            database.candidatePatternDao().deletePattern(patternId)
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun correctCandidatePattern(patternId: String, correction: String, previousBelief: String) {
+        viewModelScope.launch {
+            repository.cognitiveEngine.correctionEngine.recordCorrection(
+                targetPatternOrFact = patternId,
+                userCorrectionStatement = correction,
+                previousBelief = previousBelief
+            )
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun refreshLivingSignals() {
+        livingEnvironmentEngine.refreshAllSignals()
+        viewModelScope.launch {
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun startLiveJourney(destination: String, travelMode: MobilityState = MobilityState.DRIVING) {
+        repository.cognitiveEngine.liveJourneyEngine.startJourney(destination = destination, travelMode = travelMode)
+        viewModelScope.launch {
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun updateLiveJourneyProgress(speedKmh: Double, distanceDeltaKm: Double, currentRoad: String = "") {
+        repository.cognitiveEngine.liveJourneyEngine.updateProgress(speedKmh, distanceDeltaKm, currentRoad)
+        viewModelScope.launch {
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun recordNavigationHandoff(destination: String) {
+        repository.cognitiveEngine.liveJourneyEngine.recordNavigationHandoff(destination)
+        viewModelScope.launch {
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun completeLiveJourney() {
+        repository.cognitiveEngine.liveJourneyEngine.completeJourney()
+        viewModelScope.launch {
+            repository.cognitiveEngine.lifeContextEngine.refreshState()
+        }
+    }
+
+    fun applyPatternCorrection(target: String, correction: String, previous: String) {
+        viewModelScope.launch {
+            repository.cognitiveEngine.applyUserCorrection(target, correction, previous)
+        }
+    }
+
+    fun auditSamsungS23Sensors(): SamsungS23SensorAudit {
+        return livingEnvironmentEngine.auditSamsungS23Sensors()
+    }
+
     val currentContextEngine = CurrentContextEngine(
         timelineDao = database.timelineDao(),
         learnedRoutineDao = database.learnedRoutineDao()
@@ -128,56 +228,153 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     val systemTelemetry: StateFlow<JarvisSystemTelemetry> = jarvisCoreManager.systemTelemetry
     val isSpeaking: StateFlow<Boolean> = jarvisCoreManager.isSpeaking
 
+    // VYB Personal Genesis Engine & Universal Intelligence Layer
+    val genesisEngine = PersonalGenesisEngine(application)
+
+    private val _authorizedGenesisSources = MutableStateFlow<Set<GenesisDataSource>>(
+        setOf(
+            GenesisDataSource.IDENTITY,
+            GenesisDataSource.DEVICE,
+            GenesisDataSource.SUPPORTED_FINANCIAL_DATA,
+            GenesisDataSource.FILES,
+            GenesisDataSource.PHOTOS,
+            GenesisDataSource.SUPPORTED_SERVICES
+        )
+    )
+    val authorizedGenesisSources: StateFlow<Set<GenesisDataSource>> = _authorizedGenesisSources.asStateFlow()
+
+    private val _genesisSourceSpecs = MutableStateFlow<List<GenesisSourceSpec>>(emptyList())
+    val genesisSourceSpecs: StateFlow<List<GenesisSourceSpec>> = _genesisSourceSpecs.asStateFlow()
+
+    private val _personalProfile = MutableStateFlow(
+        run {
+            val owner = VybOwnerIdentityManager.getOwnerIdentity(application)
+            val name = prefs.getString("owner_name", "")?.ifBlank { owner.ownerName } ?: owner.ownerName
+            val email = prefs.getString("owner_email", "")?.ifBlank { owner.ownerEmail } ?: owner.ownerEmail
+            val company = prefs.getString("owner_company", "")?.ifBlank { "Metropoli Fashions" } ?: "Metropoli Fashions"
+            val jobTitle = prefs.getString("owner_job_title", "")?.ifBlank { "Managing Director" } ?: "Managing Director"
+            val homeAddress = prefs.getString("owner_home_address", "")?.ifBlank { "Salt Lake, Kolkata, West Bengal, India" } ?: "Salt Lake, Kolkata, West Bengal, India"
+            val officeAddress = prefs.getString("owner_office_address", "")?.ifBlank { "Sector V, Salt Lake, Kolkata, West Bengal, India" } ?: "Sector V, Salt Lake, Kolkata, West Bengal, India"
+            val monthlyIncome = prefs.getFloat("monthly_income", 0f).toDouble().let { if (it > 0) it else 250000.0 }
+            val fixedCommitments = prefs.getFloat("fixed_commitments", 0f).toDouble().let { if (it > 0) it else 65000.0 }
+            val savingsTarget = prefs.getFloat("monthly_savings_target", 0f).toDouble().let { if (it > 0) it else 50000.0 }
+            val currencySymbol = prefs.getString("currency_symbol", "₹") ?: "₹"
+            val diet = prefs.getString("diet_pref", "High-Protein Balanced") ?: "High-Protein Balanced"
+
+            VybPersonalProfile(
+                name = name,
+                callingTitle = prefs.getString("owner_title", "Sir") ?: "Sir",
+                companyName = company,
+                jobTitle = jobTitle,
+                homeAddress = homeAddress,
+                officeAddress = officeAddress,
+                monthlyIncome = monthlyIncome,
+                fixedCommitments = fixedCommitments,
+                savingsTarget = savingsTarget,
+                currencySymbol = currencySymbol,
+                dietaryPreference = diet
+            )
+        }
+    )
+    val personalProfile: StateFlow<VybPersonalProfile> = _personalProfile.asStateFlow()
+
+    private val _contextGraph = MutableStateFlow(PersonalContextGraph())
+    val contextGraph: StateFlow<PersonalContextGraph> = _contextGraph.asStateFlow()
+
+    private val _discoveredPatterns = MutableStateFlow<List<PatternDiscoveryItem>>(emptyList())
+    val discoveredPatterns: StateFlow<List<PatternDiscoveryItem>> = _discoveredPatterns.asStateFlow()
+
+    private val _personalDigitalTwin = MutableStateFlow<PersonalDigitalTwin?>(null)
+    val personalDigitalTwin: StateFlow<PersonalDigitalTwin?> = _personalDigitalTwin.asStateFlow()
+
+    private val _universalInstanceMetadata = MutableStateFlow(
+        genesisEngine.generateUniversalInstanceMetadata(prefs.getString("owner_name", "") ?: "Owner")
+    )
+    val universalInstanceMetadata: StateFlow<UniversalInstanceMetadata> = _universalInstanceMetadata.asStateFlow()
+
+    private val _continuousPersonalizationStage = MutableStateFlow("OBSERVE")
+    val continuousPersonalizationStage: StateFlow<String> = _continuousPersonalizationStage.asStateFlow()
+
+    // VYB Personal Intelligence & Action Engine State
+    val intelligenceOrchestrator: VybIntelligenceOrchestrator = repository.intelligenceOrchestrator
+
+    private val _lastIntelligenceResult = MutableStateFlow<IntelligenceOrchestrationResult?>(null)
+    val lastIntelligenceResult: StateFlow<IntelligenceOrchestrationResult?> = _lastIntelligenceResult.asStateFlow()
+
+    private val _activeActionPlans = MutableStateFlow<List<ActionPlan>>(emptyList())
+    val activeActionPlans: StateFlow<List<ActionPlan>> = _activeActionPlans.asStateFlow()
+
+    private val _allCapabilities = MutableStateFlow<List<VybCapabilityDeclaration>>(emptyList())
+    val allCapabilities: StateFlow<List<VybCapabilityDeclaration>> = _allCapabilities.asStateFlow()
+
+    private val _pendingConfirmationPrompt = MutableStateFlow<HumanConfirmationPrompt?>(null)
+    val pendingConfirmationPrompt: StateFlow<HumanConfirmationPrompt?> = _pendingConfirmationPrompt.asStateFlow()
+
+    private val _activeTaskState = MutableStateFlow<VybTaskExecutionState?>(null)
+    val activeTaskState: StateFlow<VybTaskExecutionState?> = _activeTaskState.asStateFlow()
+
+    private val _actionLedger = MutableStateFlow<List<ActionLedgerEntry>>(emptyList())
+    val actionLedger: StateFlow<List<ActionLedgerEntry>> = _actionLedger.asStateFlow()
+
+    private val _autonomyLevel = MutableStateFlow(AutonomyLevel.LEVEL_3_ACT_WITH_CONFIRMATION)
+    val autonomyLevel: StateFlow<AutonomyLevel> = _autonomyLevel.asStateFlow()
+
     // Onboarding State
     private val _isOnboardingCompleted = MutableStateFlow(prefs.getBoolean("is_onboarding_completed", true))
     val isOnboardingCompleted: StateFlow<Boolean> = _isOnboardingCompleted.asStateFlow()
 
-    // Owner Profile State - Unconfigured / Empty by default
-    private val _ownerName = MutableStateFlow(prefs.getString("owner_name", "") ?: "")
+    // Arrival animation flag (plays only once on cold start)
+    var hasCompletedArrivalAnimation: Boolean = false
+
+    // Owner Profile State - Anchored to PersonalProfile
+    private val _ownerName = MutableStateFlow(_personalProfile.value.name)
     val ownerName: StateFlow<String> = _ownerName.asStateFlow()
 
-    private val _ownerTitle = MutableStateFlow(prefs.getString("owner_title", "") ?: "")
+    private val _ownerTitle = MutableStateFlow(_personalProfile.value.callingTitle)
     val ownerTitle: StateFlow<String> = _ownerTitle.asStateFlow()
 
-    private val _ownerEmail = MutableStateFlow(prefs.getString("owner_email", "") ?: "")
+    private val _ownerEmail = MutableStateFlow(
+        prefs.getString("owner_email", "")?.ifBlank { VybOwnerIdentityManager.getOwnerIdentity(application).ownerEmail }
+            ?: VybOwnerIdentityManager.getOwnerIdentity(application).ownerEmail
+    )
     val ownerEmail: StateFlow<String> = _ownerEmail.asStateFlow()
 
     private val _ownerPhone = MutableStateFlow(prefs.getString("owner_phone", "") ?: "")
     val ownerPhone: StateFlow<String> = _ownerPhone.asStateFlow()
 
-    private val _ownerHomeAddress = MutableStateFlow(prefs.getString("owner_home_address", "") ?: "")
+    private val _ownerHomeAddress = MutableStateFlow(_personalProfile.value.homeAddress)
     val ownerHomeAddress: StateFlow<String> = _ownerHomeAddress.asStateFlow()
 
-    private val _ownerOfficeAddress = MutableStateFlow(prefs.getString("owner_office_address", "") ?: "")
+    private val _ownerOfficeAddress = MutableStateFlow(_personalProfile.value.officeAddress)
     val ownerOfficeAddress: StateFlow<String> = _ownerOfficeAddress.asStateFlow()
 
-    private val _ownerJobTitle = MutableStateFlow(prefs.getString("owner_job_title", "") ?: "")
+    private val _ownerJobTitle = MutableStateFlow(_personalProfile.value.jobTitle)
     val ownerJobTitle: StateFlow<String> = _ownerJobTitle.asStateFlow()
 
-    private val _ownerCompanyName = MutableStateFlow(prefs.getString("owner_company", "") ?: "")
+    private val _ownerCompanyName = MutableStateFlow(_personalProfile.value.companyName)
     val ownerCompanyName: StateFlow<String> = _ownerCompanyName.asStateFlow()
 
-    private val _ownerCity = MutableStateFlow(prefs.getString("owner_city", "") ?: "")
+    private val _ownerCity = MutableStateFlow(prefs.getString("owner_city", "Kolkata") ?: "Kolkata")
     val ownerCity: StateFlow<String> = _ownerCity.asStateFlow()
 
-    // Financial Planning Context - 0.0 by default unless set by user
-    private val _monthlyIncome = MutableStateFlow(prefs.getFloat("monthly_income", 0f).toDouble())
+    // Financial Planning Context
+    private val _monthlyIncome = MutableStateFlow(_personalProfile.value.monthlyIncome)
     val monthlyIncome: StateFlow<Double> = _monthlyIncome.asStateFlow()
 
-    private val _fixedCommitments = MutableStateFlow(prefs.getFloat("fixed_commitments", 0f).toDouble())
+    private val _fixedCommitments = MutableStateFlow(_personalProfile.value.fixedCommitments)
     val fixedCommitments: StateFlow<Double> = _fixedCommitments.asStateFlow()
 
-    private val _monthlySavingsTarget = MutableStateFlow(prefs.getFloat("monthly_savings_target", 0f).toDouble())
+    private val _monthlySavingsTarget = MutableStateFlow(_personalProfile.value.savingsTarget)
     val monthlySavingsTarget: StateFlow<Double> = _monthlySavingsTarget.asStateFlow()
 
-    private val _currencySymbol = MutableStateFlow(prefs.getString("currency_symbol", "₹") ?: "₹")
+    private val _currencySymbol = MutableStateFlow(_personalProfile.value.currencySymbol)
     val currencySymbol: StateFlow<String> = _currencySymbol.asStateFlow()
     val currency: StateFlow<String> = _currencySymbol.asStateFlow()
 
     private val _aiTone = MutableStateFlow(prefs.getString("ai_tone", "EXECUTIVE_PA") ?: "EXECUTIVE_PA")
     val aiTone: StateFlow<String> = _aiTone.asStateFlow()
 
-    private val _dietPreference = MutableStateFlow(prefs.getString("diet_preference", "") ?: "")
+    private val _dietPreference = MutableStateFlow(_personalProfile.value.dietaryPreference)
     val dietPreference: StateFlow<String> = _dietPreference.asStateFlow()
 
     // Security Verification / Lock State
@@ -189,6 +386,87 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAppLocked = MutableStateFlow(false)
     val isAppLocked: StateFlow<Boolean> = _isAppLocked.asStateFlow()
+
+    // Fluid Privacy Firewall State & Policy Controls
+    val isLocalOnlyMode: StateFlow<Boolean> = com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode
+    val pendingTransferProposal: StateFlow<com.example.domain.privacy.OutboundTransferProposal?> = com.example.domain.privacy.FluidPrivacyFirewall.pendingProposal
+    val privacyAuditLog: StateFlow<List<com.example.domain.privacy.PrivacyAuditRecord>> = com.example.domain.privacy.FluidPrivacyFirewall.auditLog
+
+    fun setLocalOnlyMode(enabled: Boolean) {
+        com.example.domain.privacy.FluidPrivacyFirewall.setLocalOnlyMode(enabled)
+    }
+
+    fun approveTransferProposal(proposalId: String): com.example.domain.privacy.TransferAuthorizationToken? {
+        return com.example.domain.privacy.FluidPrivacyFirewall.approveProposal(proposalId)
+    }
+
+    fun denyTransferProposal(proposalId: String, reason: String = "Declined by user") {
+        com.example.domain.privacy.FluidPrivacyFirewall.denyProposal(proposalId, reason)
+    }
+
+    fun cancelTransferProposal(reason: String = "Cancelled by user") {
+        com.example.domain.privacy.FluidPrivacyFirewall.cancelPendingProposal(reason)
+    }
+
+    fun requestCloudReasoningWithFirewall(prompt: String, context: Context? = null) {
+        if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+            processUserCommand(prompt, context)
+            return
+        }
+
+        val destination = com.example.domain.privacy.TransferDestination(
+            type = com.example.domain.privacy.TransferDestinationType.CLOUD_AI_SERVICE,
+            name = "Google Gemini API",
+            endpointOrPackage = "https://generativelanguage.googleapis.com"
+        )
+        val categories = setOf(
+            com.example.domain.privacy.DataCategory.GENERAL_QUERY,
+            com.example.domain.privacy.DataCategory.PERSONAL_LIFE_CONTEXT,
+            com.example.domain.privacy.DataCategory.FINANCIAL_DATA,
+            com.example.domain.privacy.DataCategory.FAMILY_AND_RELATIONSHIPS
+        )
+        val proposal = com.example.domain.privacy.FluidPrivacyFirewall.createProposal(
+            destination = destination,
+            purpose = "Cloud AI Reasoning with on-device context synthesis",
+            categories = categories,
+            payload = prompt
+        )
+        com.example.domain.privacy.FluidPrivacyFirewall.submitProposalForUserApproval(proposal)
+    }
+
+    fun onProposalAuthorized(
+        proposalId: String,
+        token: com.example.domain.privacy.TransferAuthorizationToken,
+        finalPayload: String,
+        context: Context? = null
+    ) {
+        processUserCommand(
+            prompt = finalPayload,
+            context = context,
+            authorizationToken = token
+        )
+    }
+
+    // Time-Aware Celestial Environment State & Developer/Test Override
+    private val _timeOfDayOverride = MutableStateFlow<VybTimeOfDay?>(null)
+    val timeOfDayOverride: StateFlow<VybTimeOfDay?> = _timeOfDayOverride.asStateFlow()
+
+    fun setTimeOfDayOverride(override: VybTimeOfDay?) {
+        _timeOfDayOverride.value = override
+    }
+
+    fun cycleTimeOfDayOverride() {
+        val current = _timeOfDayOverride.value
+        val next = when (current) {
+            null -> VybTimeOfDay.DAWN
+            VybTimeOfDay.DAWN -> VybTimeOfDay.MORNING
+            VybTimeOfDay.MORNING -> VybTimeOfDay.DAY
+            VybTimeOfDay.DAY -> VybTimeOfDay.EVENING
+            VybTimeOfDay.EVENING -> VybTimeOfDay.NIGHT
+            VybTimeOfDay.NIGHT -> null // back to real-time auto
+        }
+        _timeOfDayOverride.value = next
+    }
 
     // Owner Accounts Vault
     val allOwnerAccounts: StateFlow<List<OwnerAccountEntity>> = repository.allOwnerAccounts
@@ -241,16 +519,70 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         .map { it ?: 0.0 }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
+    val allPersistentIntentions: StateFlow<List<PersistentIntentionEntity>> = database.persistentIntentionDao().getAllIntentionsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val cognitiveEngine = repository.cognitiveEngine
+
+    private val _currentNextUp = MutableStateFlow<com.example.domain.cognitive.models.NextUpItem?>(null)
+    val currentNextUp: StateFlow<com.example.domain.cognitive.models.NextUpItem?> = _currentNextUp.asStateFlow()
+
+    fun refreshNextUp(nowMillis: Long = System.currentTimeMillis()) {
+        viewModelScope.launch {
+            _currentNextUp.value = cognitiveEngine.resolveNextUpForHome(nowMillis)
+        }
+    }
+
     init {
         viewModelScope.launch {
+            // Stage 1-12: Execute startup & first-launch restoration pipeline
+            startupCoordinator.executeStartupPipeline(
+                onProfileRestored = { restored ->
+                    _personalProfile.value = restored
+                    _ownerName.value = restored.name
+                    _ownerTitle.value = restored.callingTitle
+                    _ownerCompanyName.value = restored.companyName
+                    _ownerJobTitle.value = restored.jobTitle
+                    _ownerHomeAddress.value = restored.homeAddress
+                    _ownerOfficeAddress.value = restored.officeAddress
+                    _monthlyIncome.value = restored.monthlyIncome
+                    _fixedCommitments.value = restored.fixedCommitments
+                    _monthlySavingsTarget.value = restored.savingsTarget
+                    _currencySymbol.value = restored.currencySymbol
+                    _dietPreference.value = restored.dietaryPreference
+                },
+                onGraphRehydrated = { graph ->
+                    _contextGraph.value = graph
+                },
+                intelligenceOrchestrator = intelligenceOrchestrator
+            )
+
+            // Ensure verified profile facts are synced to Life Vault
+            val owner = VybOwnerIdentityManager.getOwnerIdentity(application)
+            _ownerEmail.value = owner.ownerEmail
+            _ownerPhone.value = prefs.getString("owner_phone", "") ?: ""
+            repository.syncProfileFactsToVault(_personalProfile.value, _ownerEmail.value, _ownerPhone.value)
+
+            // Save durable snapshot of initial state
+            val initialSnapshot = persistenceEngine.buildSnapshotFromDatabase(database, _personalProfile.value, owner.ownerId, _ownerEmail.value, _ownerPhone.value, _aiTone.value)
+            persistenceEngine.saveAndSyncSnapshot(initialSnapshot)
+
             repository.seedInitialOperatingLayerDataIfEmpty()
             seedInitialTimelineAndSettingsIfEmpty()
             syncWorldModelToBrain()
             deviceObserver.startObserving()
             refreshPermissionReports()
+            refreshGenesisState()
+            refreshCapabilities()
             refreshCurrentContext()
             runRoutineLearning()
+            try {
+                ensureActiveConversation()
+            } catch (e: Exception) {
+                Log.e("VYB_TRACE", "Error in init ensureActiveConversation", e)
+            }
         }
+        Log.d("VYB_TRACE", "VIEWMODEL_INIT identity=$viewModelIdentity time=$viewModelCreationTime")
     }
 
     private suspend fun seedInitialTimelineAndSettingsIfEmpty() {
@@ -402,6 +734,24 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    // Real-Time Runtime Trace Pipeline State (S23 Verification)
+    private val traceCounter = java.util.concurrent.atomic.AtomicInteger(1)
+    fun generateNextTraceId(): String {
+        return String.format(Locale.US, "ASK_TRACE_%03d", traceCounter.getAndIncrement())
+    }
+
+    private val _latestResponseText = MutableStateFlow("")
+    val latestResponseText: StateFlow<String> = _latestResponseText.asStateFlow()
+
+    private val _latestTraceStatus = MutableStateFlow("IDLE")
+    val latestTraceStatus: StateFlow<String> = _latestTraceStatus.asStateFlow()
+
+    private val _latestTraceId = MutableStateFlow("ASK_TRACE_000")
+    val latestTraceId: StateFlow<String> = _latestTraceId.asStateFlow()
+
+    private val _askVybState = MutableStateFlow(AskVybState.IDLE)
+    val askVybState: StateFlow<AskVybState> = _askVybState.asStateFlow()
+
     // User Customization / Profile state
     private val _assistantTone = MutableStateFlow(prefs.getString("assistant_tone", "Executive Chief of Staff") ?: "Executive Chief of Staff")
     val assistantTone: StateFlow<String> = _assistantTone.asStateFlow()
@@ -465,7 +815,179 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
             .putString("currency_symbol", currency)
             .apply()
 
+        _personalProfile.value = VybPersonalProfile(
+            name = name,
+            callingTitle = title,
+            homeAddress = homeAddress,
+            officeAddress = officeAddress,
+            jobTitle = jobTitle,
+            companyName = company,
+            monthlyIncome = monthlyIncome,
+            fixedCommitments = fixedCommitments,
+            savingsTarget = savingsTarget,
+            currencySymbol = currency,
+            dietaryPreference = _dietPreference.value
+        )
+
+        val ownerId = VybOwnerIdentityManager.computeStableOwnerId(email.ifBlank { name })
+        VybOwnerIdentityManager.setOwnerIdentity(
+            getApplication(),
+            VybOwnerIdentity(
+                ownerId = ownerId,
+                ownerEmail = email,
+                ownerName = name
+            )
+        )
+
+        viewModelScope.launch {
+            repository.syncProfileFactsToVault(_personalProfile.value, email, phone)
+            val snap = persistenceEngine.buildSnapshotFromDatabase(database, _personalProfile.value, ownerId, email, phone, _aiTone.value)
+            persistenceEngine.saveAndSyncSnapshot(snap)
+        }
+
         syncWorldModelToBrain()
+        refreshGenesisState()
+    }
+
+    fun refreshGenesisState() {
+        viewModelScope.launch {
+            val hasFin = _monthlyIncome.value > 0
+            val hasAcc = allOwnerAccounts.value.isNotEmpty()
+            val specs = genesisEngine.getInitialSourceSpecs(
+                ownerName = _ownerName.value,
+                hasFinancialData = hasFin,
+                hasConnectedAccounts = hasAcc,
+                authorizedTypes = _authorizedGenesisSources.value
+            )
+            _genesisSourceSpecs.value = specs
+
+            val graph = genesisEngine.buildContextGraph(
+                profile = _personalProfile.value,
+                familyList = allFamilyMembers.value,
+                taskList = allTasks.value,
+                routineList = allRoutines.value,
+                goalList = allGoals.value
+            )
+            _contextGraph.value = graph
+
+            val patterns = genesisEngine.discoverPatterns(
+                timelineEvents = recentTimelineEvents.value,
+                existingRoutines = allRoutines.value
+            )
+            _discoveredPatterns.value = patterns
+
+            _personalDigitalTwin.value = genesisEngine.buildPersonalDigitalTwin(
+                profile = _personalProfile.value,
+                authorizedSources = _authorizedGenesisSources.value.toList()
+            )
+        }
+    }
+
+    fun toggleGenesisSource(type: GenesisDataSource, isAuthorized: Boolean) {
+        val current = _authorizedGenesisSources.value.toMutableSet()
+        if (isAuthorized) current.add(type) else current.remove(type)
+        _authorizedGenesisSources.value = current
+        refreshGenesisState()
+    }
+
+    fun updatePersonalProfile(profile: VybPersonalProfile) {
+        _personalProfile.value = profile
+        saveComprehensiveProfile(
+            name = profile.name,
+            title = profile.callingTitle,
+            email = _ownerEmail.value,
+            phone = _ownerPhone.value,
+            homeAddress = profile.homeAddress,
+            officeAddress = profile.officeAddress,
+            jobTitle = profile.jobTitle,
+            company = profile.companyName,
+            city = _ownerCity.value,
+            monthlyIncome = profile.monthlyIncome,
+            fixedCommitments = profile.fixedCommitments,
+            savingsTarget = profile.savingsTarget,
+            currency = profile.currencySymbol
+        )
+        refreshGenesisState()
+    }
+
+    fun confirmPattern(patternId: String, saveAsRoutine: Boolean) {
+        val list = _discoveredPatterns.value.map {
+            if (it.id == patternId) it.copy(isConfirmed = true) else it
+        }
+        _discoveredPatterns.value = list
+        if (saveAsRoutine) {
+            val item = list.firstOrNull { it.id == patternId }
+            if (item != null) {
+                addRoutine(
+                    title = item.category,
+                    timeOfDay = "07:30 AM",
+                    daysOfWeek = "Mon, Tue, Wed, Thu, Fri",
+                    description = item.observation,
+                    prompt = "Initiate routine for ${item.category}",
+                    category = "LEARNED_ROUTINE"
+                )
+            }
+        }
+        _continuousPersonalizationStage.value = "REMEMBER"
+    }
+
+    fun dismissPattern(patternId: String) {
+        _discoveredPatterns.value = _discoveredPatterns.value.map {
+            if (it.id == patternId) it.copy(isDismissed = true) else it
+        }
+    }
+
+    fun setPersonalityStyle(style: PersonalityStyle) {
+        val updated = _personalProfile.value.copy(communicationStyle = style)
+        _personalProfile.value = updated
+        _assistantTone.value = style.title
+        prefs.edit().putString("assistant_tone", style.title).apply()
+        refreshGenesisState()
+    }
+
+    fun exportPersonalIntelligenceArchive(): String {
+        val pkg = genesisEngine.createMigrationArchive(
+            profile = _personalProfile.value,
+            memories = allMemories.value,
+            instanceMetadata = _universalInstanceMetadata.value
+        )
+        return pkg.payloadJson
+    }
+
+    fun importPersonalIntelligenceArchive(jsonStr: String): Boolean {
+        return try {
+            val root = org.json.JSONObject(jsonStr)
+            if (root.has("profile")) {
+                val p = root.getJSONObject("profile")
+                val importedProfile = _personalProfile.value.copy(
+                    name = p.optString("name", _personalProfile.value.name),
+                    callingTitle = p.optString("title", _personalProfile.value.callingTitle),
+                    companyName = p.optString("company", _personalProfile.value.companyName),
+                    jobTitle = p.optString("jobTitle", _personalProfile.value.jobTitle),
+                    monthlyIncome = p.optDouble("income", _personalProfile.value.monthlyIncome),
+                    fixedCommitments = p.optDouble("commitments", _personalProfile.value.fixedCommitments),
+                    savingsTarget = p.optDouble("savingsTarget", _personalProfile.value.savingsTarget),
+                    currencySymbol = p.optString("currency", _personalProfile.value.currencySymbol)
+                )
+                updatePersonalProfile(importedProfile)
+            }
+            refreshGenesisState()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun wipeAllPersonalIntelligence() {
+        resetVybEntirely()
+        _isOnboardingCompleted.value = false
+        prefs.edit().putBoolean("is_onboarding_completed", false).apply()
+        _personalProfile.value = VybPersonalProfile()
+        _authorizedGenesisSources.value = setOf(
+            GenesisDataSource.IDENTITY,
+            GenesisDataSource.DEVICE
+        )
+        refreshGenesisState()
     }
 
     fun selectConversation(id: Long) {
@@ -499,33 +1021,100 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendMessage(prompt: String) {
-        val convId = _currentConversationId.value ?: return
-        if (prompt.isBlank()) return
+    suspend fun ensureActiveConversation(): Long {
+        val current = _currentConversationId.value
+        if (current != null) return current
 
-        viewModelScope.launch {
+        val latest = repository.getLatestConversation()
+        val convId = if (latest != null) {
+            latest.id
+        } else {
+            repository.createConversation("Ask VYB")
+        }
+        _currentConversationId.value = convId
+        _currentConversation.value = repository.getConversationById(convId)
+        Log.d("VYB_TRACE", "Active conversation ensured id=$convId")
+        return convId
+    }
+
+    /**
+     * Canonical conversational command processor for Ask VYB pipeline (Parts 3, 7, 8, 12, 14).
+     * Connects UI directly to VybIntelligenceOrchestrator and VybRepository.
+     */
+    fun processUserCommand(
+        prompt: String,
+        context: Context? = null,
+        traceId: String = generateNextTraceId(),
+        authorizationToken: com.example.domain.privacy.TransferAuthorizationToken? = null
+    ): Job {
+        val cleanPrompt = prompt.trim()
+        Log.d("VYB_TRACE", "[$traceId] PROCESS_USER_COMMAND_ENTERED (chars=${cleanPrompt.length})")
+        _latestTraceId.value = traceId
+        _latestTraceStatus.value = "[$traceId] PROCESS_USER_COMMAND_ENTERED"
+        _askVybState.value = AskVybState.SUBMITTING
+
+        return viewModelScope.launch {
+            Log.d("VYB_TRACE", "[$traceId] COROUTINE_STARTED")
+            Log.d("VYB_TRACE", "[$traceId] VIEWMODEL_PROCESS_STARTED")
             _isLoading.value = true
+            _askVybState.value = AskVybState.THINKING
             _errorMessage.value = null
+
             try {
+                val convId = ensureActiveConversation()
                 syncWorldModelToBrain()
-                val result = repository.sendUserMessage(convId, prompt, getApplication<Application>())
-                if (result.isFailure) {
-                    _errorMessage.value = result.exceptionOrNull()?.message ?: "Failed to generate response"
-                } else {
+
+                Log.d("VYB_TRACE", "[$traceId] ORCHESTRATOR_CALLED")
+                _latestTraceStatus.value = "[$traceId] ORCHESTRATOR_CALLED"
+
+                val result = repository.sendUserMessage(
+                    conversationId = convId,
+                    userPrompt = cleanPrompt,
+                    appContext = context ?: getApplication<Application>(),
+                    traceId = traceId,
+                    authorizationToken = authorizationToken
+                )
+
+                if (result.isSuccess) {
+                    val message = result.getOrThrow()
+                    Log.d("VYB_TRACE", "[$traceId] RESPONSE_STATE_UPDATED (chars=${message.content.length})")
+                    _latestResponseText.value = message.content
+                    Log.d("VYB_TRACE", "[$traceId] VIEWMODEL_STATE_UPDATED")
+                    _latestTraceStatus.value = "[$traceId] VIEWMODEL_STATE_UPDATED"
                     _currentConversation.value = repository.getConversationById(convId)
+                    _askVybState.value = AskVybState.SUCCESS
+                } else {
+                    val ex = result.exceptionOrNull()
+                    val errorMsg = ex?.message ?: "Failed to generate response"
+                    Log.e("VYB_TRACE", "[$traceId] REPOSITORY_RESULT_FAILURE: class=${ex?.javaClass?.name} msg=$errorMsg", ex)
+                    _errorMessage.value = errorMsg
+                    _latestResponseText.value = "Error: $errorMsg"
+                    _latestTraceStatus.value = "[$traceId] ERROR: $errorMsg"
+                    _askVybState.value = AskVybState.ERROR
                 }
-            } catch (e: Exception) {
-                _errorMessage.value = e.message ?: "Failed to send message"
+            } catch (t: Throwable) {
+                Log.e("VYB_TRACE", "[$traceId] VIEWMODEL_COROUTINE_EXCEPTION: class=${t.javaClass.name} msg=${t.message}", t)
+                val errorMsg = t.message ?: "Unexpected error"
+                _errorMessage.value = errorMsg
+                _latestResponseText.value = "Exception: $errorMsg"
+                _latestTraceStatus.value = "[$traceId] EXCEPTION: $errorMsg"
+                _askVybState.value = AskVybState.ERROR
             } finally {
                 _isLoading.value = false
+                if (_askVybState.value == AskVybState.THINKING || _askVybState.value == AskVybState.SUBMITTING) {
+                    _askVybState.value = AskVybState.IDLE
+                }
             }
         }
     }
 
+    fun sendMessage(prompt: String) {
+        processUserCommand(prompt)
+    }
+
     fun retryLastMessage() {
-        val convId = _currentConversationId.value ?: return
         val lastUserMsg = currentMessages.value.lastOrNull { it.sender == "USER" } ?: return
-        sendMessage(lastUserMsg.content)
+        processUserCommand(lastUserMsg.content)
     }
 
     fun deleteConversation(id: Long) {
@@ -730,6 +1319,21 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         _ownerName.value = name
         _ownerEmail.value = email
         prefs.edit().putString("owner_name", name).putString("owner_email", email).apply()
+        _personalProfile.value = _personalProfile.value.copy(name = name)
+        val ownerId = VybOwnerIdentityManager.computeStableOwnerId(email.ifBlank { name })
+        VybOwnerIdentityManager.setOwnerIdentity(
+            getApplication(),
+            VybOwnerIdentity(
+                ownerId = ownerId,
+                ownerEmail = email,
+                ownerName = name
+            )
+        )
+        viewModelScope.launch {
+            repository.syncProfileFactsToVault(_personalProfile.value, email, _ownerPhone.value)
+            val snap = persistenceEngine.buildSnapshotFromDatabase(database, _personalProfile.value, ownerId, email, _ownerPhone.value, _aiTone.value)
+            persistenceEngine.saveAndSyncSnapshot(snap)
+        }
         syncWorldModelToBrain()
     }
 
@@ -737,6 +1341,10 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         _monthlyIncome.value = income
         _monthlySavingsTarget.value = savingsTarget
         prefs.edit().putFloat("monthly_income", income.toFloat()).putFloat("monthly_savings_target", savingsTarget.toFloat()).apply()
+        _personalProfile.value = _personalProfile.value.copy(monthlyIncome = income, savingsTarget = savingsTarget)
+        viewModelScope.launch {
+            syncSnapshotToDurableVault()
+        }
         syncWorldModelToBrain()
     }
 
@@ -745,12 +1353,17 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         _dietPreference.value = diet
         _currencySymbol.value = currency
         prefs.edit().putString("ai_tone", tone).putString("diet_preference", diet).putString("currency_symbol", currency).apply()
+        _personalProfile.value = _personalProfile.value.copy(dietaryPreference = diet, currencySymbol = currency)
+        viewModelScope.launch {
+            syncSnapshotToDurableVault()
+        }
         syncWorldModelToBrain()
     }
 
     fun updateFamilyMember(member: FamilyMemberEntity) {
         viewModelScope.launch {
             repository.updateFamilyMember(member)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -758,6 +1371,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteFamilyMember(id: Long) {
         viewModelScope.launch {
             repository.deleteFamilyMember(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -766,6 +1380,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun addRoutine(title: String, timeOfDay: String, daysOfWeek: String, description: String, prompt: String, cost: Double = 0.0, category: String = "TRANSPORT") {
         viewModelScope.launch {
             repository.addRoutine(title, timeOfDay, daysOfWeek, description, prompt, cost, category)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -773,6 +1388,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleRoutine(id: Long, isEnabled: Boolean) {
         viewModelScope.launch {
             repository.toggleRoutine(id, isEnabled)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -780,6 +1396,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteRoutine(id: Long) {
         viewModelScope.launch {
             repository.deleteRoutine(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -788,6 +1405,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun addGoal(title: String, category: String, targetValue: String, currentValue: String, targetDeadline: String, progressPercent: Int = 0, stepsSummary: String = "") {
         viewModelScope.launch {
             repository.addGoal(title, category, targetValue, currentValue, targetDeadline, progressPercent, stepsSummary)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -795,6 +1413,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun updateGoalProgress(id: Long, progress: Int, isCompleted: Boolean) {
         viewModelScope.launch {
             repository.updateGoalProgress(id, progress, isCompleted)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -802,6 +1421,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteGoal(id: Long) {
         viewModelScope.launch {
             repository.deleteGoal(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -810,6 +1430,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun addProject(title: String, description: String, category: String, deadline: String, progress: Int = 0) {
         viewModelScope.launch {
             repository.addProject(title, description, category, deadline, progress)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -817,6 +1438,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun updateProject(project: ProjectEntity) {
         viewModelScope.launch {
             repository.updateProject(project)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -824,6 +1446,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteProject(id: Long) {
         viewModelScope.launch {
             repository.deleteProject(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -832,6 +1455,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun addMemory(category: String, key: String, value: String, source: String = "User Profile") {
         viewModelScope.launch {
             repository.addMemory(category, key, value, source)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -839,6 +1463,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun updateMemory(memory: MemoryItemEntity) {
         viewModelScope.launch {
             repository.updateMemory(memory)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -846,6 +1471,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteMemory(id: Long) {
         viewModelScope.launch {
             repository.deleteMemory(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -853,6 +1479,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAllMemories() {
         viewModelScope.launch {
             repository.clearAllMemories()
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -869,6 +1496,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             repository.addVaultItem(category, key, value, source, sourceDetail, numericValue, isConfirmed)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -876,6 +1504,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun updateVaultFact(item: LifeVaultItemEntity) {
         viewModelScope.launch {
             repository.updateVaultItem(item)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -883,6 +1512,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteVaultFact(id: Long) {
         viewModelScope.launch {
             repository.deleteVaultItem(id)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -890,6 +1520,7 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun resolveVaultConflict(itemId: Long, acceptNew: Boolean) {
         viewModelScope.launch {
             repository.resolveVaultConflict(itemId, acceptNew)
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
     }
@@ -897,8 +1528,20 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAllVaultFacts() {
         viewModelScope.launch {
             repository.clearAllVaultItems()
+            syncSnapshotToDurableVault()
             syncWorldModelToBrain()
         }
+    }
+
+    suspend fun syncSnapshotToDurableVault() {
+        val owner = VybOwnerIdentityManager.getOwnerIdentity(getApplication())
+        val snap = persistenceEngine.buildSnapshotFromDatabase(database, _personalProfile.value, owner.ownerId, _ownerEmail.value, _ownerPhone.value, _aiTone.value)
+        persistenceEngine.saveAndSyncSnapshot(snap)
+    }
+
+    suspend fun getPersistenceDiagnostics(): PersistenceDiagnosticSnapshot {
+        val owner = VybOwnerIdentityManager.getOwnerIdentity(getApplication())
+        return persistenceEngine.getDiagnosticSnapshot(database, owner.ownerId)
     }
 
     // Security & Pin
@@ -981,9 +1624,105 @@ class VybViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun refreshCapabilities() {
+        val caps = intelligenceOrchestrator.capabilityRegistry.getAllCapabilities(
+            getApplication<Application>(),
+            permissionManager
+        )
+        _allCapabilities.value = caps
+    }
+
+    fun processIntelligenceCommand(
+        input: String,
+        onComplete: ((IntelligenceOrchestrationResult) -> Unit)? = null
+    ) {
+        if (input.isBlank()) return
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val result = intelligenceOrchestrator.processRequest(
+                    input = input,
+                    profile = _personalProfile.value,
+                    contextGraph = _contextGraph.value,
+                    authorizedSources = _authorizedGenesisSources.value,
+                    appContext = getApplication<Application>(),
+                    permissionManager = permissionManager
+                )
+                _lastIntelligenceResult.value = result
+
+                result.updatedProfile?.let { updatePersonalProfile(it) }
+                result.updatedContextGraph?.let { _contextGraph.value = it }
+
+                result.actionPlan?.let { plan ->
+                    _activeActionPlans.value = listOf(plan) + _activeActionPlans.value.filter { it.planId != plan.planId }
+                }
+
+                if (result.confirmationPrompt != null) {
+                    _pendingConfirmationPrompt.value = result.confirmationPrompt
+                }
+
+                refreshCapabilities()
+                onComplete?.invoke(result)
+            } catch (e: Exception) {
+                _errorMessage.value = e.message ?: "Failed to orchestrate action"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun confirmPendingIntelligenceAction(prompt: HumanConfirmationPrompt, context: Context) {
+        viewModelScope.launch {
+            _pendingConfirmationPrompt.value = null
+            val plan = _activeActionPlans.value.firstOrNull { it.status == PlanStatus.AWAITING_CONFIRMATION }
+            if (plan != null) {
+                val assignedAgent = intelligenceOrchestrator.agentRegistry.findAgentForIntent(
+                    _lastIntelligenceResult.value?.universalIntent ?: return@launch
+                ) ?: return@launch
+
+                val updatedPlan = intelligenceOrchestrator.actionPlanEngine.executeFullPlan(
+                    plan.copy(status = PlanStatus.IN_PROGRESS),
+                    _lastIntelligenceResult.value!!.universalIntent,
+                    assignedAgent,
+                    _lastIntelligenceResult.value!!.resolvedContext,
+                    context,
+                    permissionManager
+                )
+                _activeActionPlans.value = _activeActionPlans.value.map { if (it.planId == plan.planId) updatedPlan else it }
+                Toast.makeText(context, "Action confirmed and executed: ${plan.goal}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun cancelPendingIntelligenceAction(prompt: HumanConfirmationPrompt) {
+        _pendingConfirmationPrompt.value = null
+        val plan = _activeActionPlans.value.firstOrNull { it.status == PlanStatus.AWAITING_CONFIRMATION }
+        if (plan != null) {
+            _activeActionPlans.value = _activeActionPlans.value.map {
+                if (it.planId == plan.planId) it.copy(status = PlanStatus.CANCELLED) else it
+            }
+        }
+    }
+
+    fun confirmPendingAction(approved: Boolean, context: Context? = null) {
+        val prompt = _pendingConfirmationPrompt.value
+        if (prompt != null) {
+            if (approved) {
+                confirmPendingIntelligenceAction(prompt, context ?: getApplication<Application>())
+            } else {
+                cancelPendingIntelligenceAction(prompt)
+            }
+        }
+    }
+
+    fun startNewSession() {
+        clearAllConversations()
+    }
+
     override fun onCleared() {
         super.onCleared()
         jarvisCoreManager.destroy()
+        livingEnvironmentEngine.unregisterSensors()
     }
 
     fun parsePayload(json: String?): VybIntentPayload? {

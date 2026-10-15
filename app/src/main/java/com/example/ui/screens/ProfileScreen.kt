@@ -54,6 +54,19 @@ fun ProfileScreen(
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showChangePinDialog by remember { mutableStateOf(false) }
+    var showMyVybDashboard by remember { mutableStateOf(false) }
+
+    if (showMyVybDashboard) {
+        MyVybScreen(
+            viewModel = viewModel,
+            onNavigateBack = { showMyVybDashboard = false },
+            onTriggerGenesisScan = {
+                showMyVybDashboard = false
+                viewModel.resetOnboarding()
+            }
+        )
+        return
+    }
 
     val toneOptions = listOf(
         "JARVIS (Stark AI Precision)",
@@ -160,14 +173,26 @@ fun ProfileScreen(
                         HorizontalDivider(color = Slate800, thickness = 1.dp)
 
                         Button(
+                            onClick = { showMyVybDashboard = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = Slate950),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("open_my_vyb_dashboard_btn")
+                        ) {
+                            Icon(Icons.Default.AccountTree, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Open MY VYB Owner Dashboard", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
                             onClick = { viewModel.resetOnboarding() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Slate800, contentColor = CyanNeon),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanNeon),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth().testTag("restart_induction_btn")
                         ) {
-                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Biotech, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Re-run 4-Step Executive Induction Setup", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Re-run VYB Personal Genesis & Life Scan", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

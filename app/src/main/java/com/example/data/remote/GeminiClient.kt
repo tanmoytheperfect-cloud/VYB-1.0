@@ -16,7 +16,8 @@ object GeminiClient {
         .build()
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        // Enforce Level.NONE to prevent leaking private prompts, personal context, or URL params into Logcat
+        level = HttpLoggingInterceptor.Level.NONE
     }
 
     private val okHttpClient = OkHttpClient.Builder()

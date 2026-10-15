@@ -427,10 +427,21 @@ class PersonalLifeVaultEngine(
         }
 
         // 11. Generic explicit remember
-        if (isExplicitRemember && clean.contains(" is ")) {
-            val key = clean.substringBefore(" is ").trim()
-            val value = clean.substringAfter(" is ").trim().removeSuffix(".")
-            return ExtractedFact(VaultCategory.MEMORIES, key, value)
+        if (isExplicitRemember) {
+            val category = when {
+                lower.contains("prefer") || lower.contains("like") || lower.contains("cheap") || lower.contains("budget") -> VaultCategory.MEMORIES
+                lower.contains("office") || lower.contains("work") -> VaultCategory.WORK
+                lower.contains("school") || lower.contains("son") || lower.contains("wife") || lower.contains("family") -> VaultCategory.FAMILY
+                else -> VaultCategory.MEMORIES
+            }
+            val key = when {
+                lower.contains("cheap") || lower.contains("cheaper") -> "Transport & Spend Preference"
+                lower.contains("prefer") -> "User Preference"
+                clean.contains(" is ") -> clean.substringBefore(" is ").trim()
+                else -> "Note: ${clean.take(30)}"
+            }
+            val value = if (clean.contains(" is ")) clean.substringAfter(" is ").trim().removeSuffix(".") else clean
+            return ExtractedFact(category, key, value)
         }
 
         return null

@@ -21,6 +21,12 @@ interface LifeVaultDao {
     @Query("SELECT * FROM life_vault_items WHERE `key` = :key LIMIT 1")
     suspend fun findVaultItemByKey(key: String): LifeVaultItemEntity?
 
+    @Query("SELECT COUNT(*) FROM life_vault_items")
+    suspend fun getVaultFactCount(): Int
+
+    @Query("SELECT * FROM life_vault_items WHERE category = :category AND `key` = :key LIMIT 1")
+    suspend fun getItemByCategoryAndKey(category: String, key: String): LifeVaultItemEntity?
+
     @Query("SELECT * FROM life_vault_items WHERE category = :category AND `key` = :key LIMIT 1")
     suspend fun findVaultItemByCategoryAndKey(category: String, key: String): LifeVaultItemEntity?
 

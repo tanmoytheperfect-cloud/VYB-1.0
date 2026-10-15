@@ -34,25 +34,26 @@ class MilestoneThreeLearningTest {
         }
 
         override fun getRecentEventsFlow(limit: Int): Flow<List<TimelineEventEntity>> =
-            MutableStateFlow(events.sortedByDescending { it.timestamp }.take(limit))
+            MutableStateFlow(events.takeLast(limit))
 
         override fun getEventsByDateFlow(dateString: String): Flow<List<TimelineEventEntity>> =
-            MutableStateFlow(events.filter { it.dateString == dateString }.sortedBy { it.timestamp })
+            MutableStateFlow(events.filter { it.dateString == dateString })
 
         override suspend fun getEventsByDate(dateString: String): List<TimelineEventEntity> {
-            return events.filter { it.dateString == dateString }.sortedBy { it.timestamp }
+            return events.filter { it.dateString == dateString }
         }
 
         override suspend fun getEventsSince(sinceTimestamp: Long): List<TimelineEventEntity> {
-            return events.filter { it.timestamp >= sinceTimestamp }.sortedBy { it.timestamp }
+            return events.filter { it.timestamp >= sinceTimestamp }
         }
 
         override suspend fun getEventsByType(type: String, limit: Int): List<TimelineEventEntity> {
-            return events.filter { it.eventType == type }.sortedByDescending { it.timestamp }.take(limit)
+            return events.filter { it.eventType == type }.take(limit)
         }
 
-        override suspend fun getEventCountForDate(dateString: String): Int =
-            events.count { it.dateString == dateString }
+        override suspend fun getEventCountForDate(dateString: String): Int {
+            return events.count { it.dateString == dateString }
+        }
 
         override suspend fun clearEventsForDate(dateString: String) {
             events.removeAll { it.dateString == dateString }
@@ -60,10 +61,6 @@ class MilestoneThreeLearningTest {
 
         override suspend fun clearAllEvents() {
             events.clear()
-        }
-
-        suspend fun deleteAllEvents() {
-            clearAllEvents()
         }
     }
 
@@ -85,15 +82,13 @@ class MilestoneThreeLearningTest {
             MutableStateFlow(routines.values.filter { it.isActive })
 
         override suspend fun getVerifiedLearnedRoutines(): List<LearnedRoutineEntity> {
-            return routines.values.filter { it.status == "LEARNED_ROUTINE" && it.isActive }
+            return routines.values.filter { it.status == "LEARNED_ROUTINE" }
         }
 
         override suspend fun getRoutineById(id: String): LearnedRoutineEntity? = routines[id]
 
         override suspend fun getRoutinesForDay(day: String): List<LearnedRoutineEntity> {
-            return routines.values.filter {
-                it.daysOfWeek.contains(day) || it.daysOfWeek == "WEEKDAY" || it.daysOfWeek == "WEEKEND" || it.daysOfWeek == "ANY"
-            }
+            return routines.values.filter { it.daysOfWeek.contains(day) || it.daysOfWeek == "ANY" || it.daysOfWeek == "WEEKDAY" }
         }
 
         override suspend fun deleteRoutine(id: String) {
@@ -112,19 +107,18 @@ class MilestoneThreeLearningTest {
             reflections.add(reflection)
         }
 
-        override fun getAllReflectionsFlow(): Flow<List<DailyReflectionEntity>> =
-            MutableStateFlow(reflections.sortedByDescending { it.timestamp })
+        override fun getAllReflectionsFlow(): Flow<List<DailyReflectionEntity>> = MutableStateFlow(reflections)
 
         override suspend fun getReflectionByDate(dateString: String): DailyReflectionEntity? {
             return reflections.find { it.dateString == dateString }
         }
 
         override suspend fun getLatestReflection(): DailyReflectionEntity? {
-            return reflections.maxByOrNull { it.timestamp }
+            return reflections.lastOrNull()
         }
 
         override suspend fun getRecentReflections(limit: Int): List<DailyReflectionEntity> {
-            return reflections.sortedByDescending { it.timestamp }.take(limit)
+            return reflections.takeLast(limit)
         }
 
         override suspend fun clearAllReflections() {
@@ -189,35 +183,30 @@ class MilestoneThreeLearningTest {
 
     @Test
     fun test3_repeatedObservationsAcrossMultipleDaysIncreasesEvidence() = runBlocking {
-        // Log morning unlocks across 6 distinct weekdays around 07:15 - 07:25
-        val baseCal = Calendar.getInstance().apply {
+        // Log morning unlocks across 6 distinct weekdays around 07:20 - 07:25 AM
+        val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 7)
             set(Calendar.MINUTE, 20)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        var addedDays = 0
-        var offsetDays = 1
-        while (addedDays < 6) {
-            val cal = (baseCal.clone() as Calendar).apply {
-                add(Calendar.DAY_OF_YEAR, -offsetDays)
-            }
-            offsetDays++
-            val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
-            if (dayOfWeek in Calendar.MONDAY..Calendar.FRIDAY) {
-                cal.add(Calendar.MINUTE, addedDays)
-                val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(cal.timeInMillis))
+        var count = 0
+        while (count < 6) {
+            cal.add(Calendar.DAY_OF_YEAR, -1)
+            val dow = cal.get(Calendar.DAY_OF_WEEK)
+            if (dow in Calendar.MONDAY..Calendar.FRIDAY) {
+                val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
                 timelineDao.insertEvent(
                     TimelineEventEntity(
-                        timestamp = cal.timeInMillis,
+                        timestamp = cal.timeInMillis + (count * 60 * 1000L),
                         eventType = "DEVICE_UNLOCK",
                         source = "SYSTEM_RECEIVER",
                         contextData = "Device unlocked",
-                        dayOfWeek = dayOfWeek,
+                        dayOfWeek = dow,
                         dateString = dateStr
                     )
                 )
-                addedDays++
+                count++
             }
         }
 
@@ -355,14 +344,21 @@ class MilestoneThreeLearningTest {
 
     @Test
     fun test7_deletingObservationsRecalculatesRoutines() = runBlocking {
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = System.currentTimeMillis()
+            set(Calendar.DAY_OF_WEEK, Calendar.WEDNESDAY)
+            set(Calendar.HOUR_OF_DAY, 7)
+            set(Calendar.MINUTE, 30)
+        }
+        val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(cal.timeInMillis))
         timelineDao.insertEvent(
             TimelineEventEntity(
-                timestamp = System.currentTimeMillis(),
+                timestamp = cal.timeInMillis,
                 eventType = "DEVICE_UNLOCK",
                 source = "SYSTEM_RECEIVER",
                 contextData = "Unlock",
                 dayOfWeek = Calendar.WEDNESDAY,
-                dateString = "2026-08-28"
+                dateString = dateStr
             )
         )
 
@@ -370,7 +366,7 @@ class MilestoneThreeLearningTest {
         assertEquals(1, initialRoutines.size)
 
         // Clear all timeline events
-        timelineDao.deleteAllEvents()
+        timelineDao.clearAllEvents()
         val emptyRoutines = routineLearningEngine.analyzeAndLearnRoutines()
         assertTrue("After timeline deletion, analyzed routines must be empty", emptyRoutines.isEmpty())
     }

@@ -40,6 +40,17 @@ object DeviceAppExecutionBridge {
             else -> null
         }
 
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = provider,
+            destinationPackageOrUri = pkg ?: "ride_provider",
+            purpose = "Ride booking dispatch to $destination",
+            categories = setOf(
+                com.example.domain.privacy.DataCategory.LOCATION_COORDINATES,
+                com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION
+            ),
+            payload = "destination=$destination,pickup=$pickup"
+        )
+
         try {
             // 1. Try launching installed app via PackageManager
             if (pkg != null) {
@@ -87,6 +98,15 @@ object DeviceAppExecutionBridge {
             }
 
             // 3. Fallback to Official Mobile Web App or Google Maps Ride Navigation
+            if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+                return ExecutionResult(
+                    success = false,
+                    appName = provider,
+                    actionDescription = "External web redirection blocked",
+                    details = "Local-Only Mode is active: external web URL redirection blocked by Fluid Privacy Firewall."
+                )
+            }
+
             val (webUri, actionLabel) = when (provider.lowercase().trim()) {
                 "uber" -> Pair(Uri.parse("https://m.uber.com/looking?drop[0]=$encodedDest"), "Uber Web")
                 "ola" -> Pair(Uri.parse("https://book.olacabs.com"), "Ola Web")
@@ -110,6 +130,14 @@ object DeviceAppExecutionBridge {
         } catch (e: Exception) {
             e.printStackTrace()
             // Final fallback: Google Maps search
+            if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+                return ExecutionResult(
+                    success = false,
+                    appName = provider,
+                    actionDescription = "External web redirection blocked",
+                    details = "Local-Only Mode is active: external web search blocked by Fluid Privacy Firewall."
+                )
+            }
             return try {
                 val mapUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$encodedDest")
                 val mapIntent = Intent(Intent.ACTION_VIEW, mapUri).apply {
@@ -144,6 +172,14 @@ object DeviceAppExecutionBridge {
         val encodedMsg = URLEncoder.encode(messageText, "UTF-8")
         val cleanPhone = phoneNumber?.replace("[^0-9+]".toRegex(), "") ?: ""
         
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = "WhatsApp",
+            destinationPackageOrUri = "com.whatsapp",
+            purpose = "Send WhatsApp communication",
+            categories = setOf(com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION),
+            payload = "recipient=${cleanPhone.ifBlank { "selected_contact" }},message=$messageText"
+        )
+
         try {
             // 1. Try WhatsApp direct URI
             val whatsappUri = if (cleanPhone.isNotBlank()) {
@@ -190,6 +226,11 @@ object DeviceAppExecutionBridge {
             }
 
             // 3. Fallback to browser or SMS
+            if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+                // If Local-Only Mode is active, fallback to device SMS to avoid outbound web link
+                return executeSendSms(context, cleanPhone, messageText)
+            }
+
             context.startActivity(webIntent)
             return ExecutionResult(
                 success = true,
@@ -211,6 +252,14 @@ object DeviceAppExecutionBridge {
         phoneNumber: String?,
         messageText: String
     ): ExecutionResult {
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = "Messages / SMS",
+            destinationPackageOrUri = "smsto",
+            purpose = "Send SMS text message",
+            categories = setOf(com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION),
+            payload = "recipient=${phoneNumber ?: "selected_contact"},message=$messageText"
+        )
+
         try {
             val uri = if (!phoneNumber.isNullOrBlank()) Uri.parse("smsto:$phoneNumber") else Uri.parse("smsto:")
             val smsIntent = Intent(Intent.ACTION_SENDTO, uri).apply {
@@ -242,6 +291,14 @@ object DeviceAppExecutionBridge {
         context: Context,
         destinationAddress: String
     ): ExecutionResult {
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = "Google Maps",
+            destinationPackageOrUri = "com.google.android.apps.maps",
+            purpose = "Turn-by-turn navigation route to $destinationAddress",
+            categories = setOf(com.example.domain.privacy.DataCategory.LOCATION_COORDINATES),
+            payload = "destination=$destinationAddress"
+        )
+
         try {
             val encoded = URLEncoder.encode(destinationAddress, "UTF-8")
             val uri = Uri.parse("google.navigation:q=$encoded")
@@ -252,6 +309,14 @@ object DeviceAppExecutionBridge {
             if (intent.resolveActivity(context.packageManager) != null) {
                 context.startActivity(intent)
             } else {
+                if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+                    return ExecutionResult(
+                        success = false,
+                        appName = "Google Maps",
+                        actionDescription = "Web maps redirection blocked",
+                        details = "Local-Only Mode is active: external web map URL redirection blocked by Fluid Privacy Firewall."
+                    )
+                }
                 val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$encoded")
                 val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -281,8 +346,15 @@ object DeviceAppExecutionBridge {
         context: Context,
         phoneNumber: String
     ): ExecutionResult {
+        val clean = phoneNumber.replace("[^0-9+]".toRegex(), "")
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = "Phone Dialer",
+            destinationPackageOrUri = "tel",
+            purpose = "Place outbound phone call to $clean",
+            categories = setOf(com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION),
+            payload = "number=$clean"
+        )
         try {
-            val clean = phoneNumber.replace("[^0-9+]".toRegex(), "")
             val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clean")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -312,6 +384,13 @@ object DeviceAppExecutionBridge {
         subject: String,
         bodyText: String
     ): ExecutionResult {
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = "Email / Gmail",
+            destinationPackageOrUri = "mailto",
+            purpose = "Draft email to $recipientEmail",
+            categories = setOf(com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION),
+            payload = "recipient=$recipientEmail,subject=$subject"
+        )
         try {
             val intent = Intent(Intent.ACTION_SENDTO).apply {
                 data = Uri.parse("mailto:$recipientEmail")
@@ -353,6 +432,14 @@ object DeviceAppExecutionBridge {
             else -> Pair(null, "https://www.google.com/search?q=$encoded")
         }
 
+        com.example.domain.privacy.FluidPrivacyFirewall.recordExternalIntentDispatch(
+            targetName = platform,
+            destinationPackageOrUri = pkg ?: "web_search",
+            purpose = "Search products on $platform for \"$searchQuery\"",
+            categories = setOf(com.example.domain.privacy.DataCategory.EXTERNAL_COMMUNICATION),
+            payload = "query=$searchQuery,platform=$platform"
+        )
+
         try {
             if (pkg != null) {
                 val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
@@ -366,6 +453,15 @@ object DeviceAppExecutionBridge {
                         details = "Opened $platform app to search products."
                     )
                 }
+            }
+
+            if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+                return ExecutionResult(
+                    success = false,
+                    appName = platform,
+                    actionDescription = "Web search redirection blocked",
+                    details = "Local-Only Mode is active: external web search blocked by Fluid Privacy Firewall."
+                )
             }
 
             val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).apply {

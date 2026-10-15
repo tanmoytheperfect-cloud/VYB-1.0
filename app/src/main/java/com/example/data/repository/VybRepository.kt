@@ -7,6 +7,7 @@ import com.example.data.model.VybIntentPayload
 import com.example.data.remote.GeminiClient
 import com.example.domain.orchestrator.VybOrchestrator
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,11 +37,30 @@ class VybRepository(
 
     val personalLifeVaultEngine = com.example.domain.vault.PersonalLifeVaultEngine(lifeVaultDao)
 
+    val cognitiveEngine = com.example.domain.cognitive.VybCognitiveEngine(database)
+
     val orchestrator = VybOrchestrator(
         memoryDao = memoryDao,
         taskDao = taskDao,
         geminiRepository = geminiRepository,
-        lifeVaultDao = lifeVaultDao
+        lifeVaultDao = lifeVaultDao,
+        routineDao = routineDao,
+        learnedRoutineDao = learnedRoutineDao,
+        familyDao = familyDao,
+        goalDao = goalDao,
+        cognitiveEngine = cognitiveEngine
+    )
+
+    val intelligenceOrchestrator = com.example.domain.intelligence.VybIntelligenceOrchestrator(
+        memoryDao = memoryDao,
+        taskDao = taskDao,
+        lifeVaultDao = lifeVaultDao,
+        expenseDao = expenseDao,
+        shoppingDao = shoppingDao,
+        routineDao = routineDao,
+        goalDao = goalDao,
+        projectDao = projectDao,
+        familyDao = familyDao
     )
 
     val allConversations: Flow<List<ConversationEntity>> = conversationDao.getAllConversations()
@@ -105,11 +125,18 @@ class VybRepository(
         return conversationDao.insertConversation(conversation)
     }
 
+    suspend fun getLatestConversation(): ConversationEntity? {
+        return conversationDao.getAllConversations().firstOrNull()?.firstOrNull()
+    }
+
     suspend fun sendUserMessage(
         conversationId: Long,
         userPrompt: String,
-        appContext: android.content.Context? = null
+        appContext: android.content.Context? = null,
+        traceId: String? = null,
+        authorizationToken: com.example.domain.privacy.TransferAuthorizationToken? = null
     ): Result<MessageEntity> {
+        val currentTrace = traceId ?: "ASK_TRACE_000"
         // Insert user message
         val userMessage = MessageEntity(
             conversationId = conversationId,
@@ -118,9 +145,10 @@ class VybRepository(
             timestamp = System.currentTimeMillis()
         )
         messageDao.insertMessage(userMessage)
+        intelligenceOrchestrator.conversationContextEngine.recordUserTurn(userPrompt)
 
         return try {
-            val orchestratorResult = orchestrator.processMessage(userPrompt, appContext)
+            val orchestratorResult = orchestrator.processMessage(userPrompt, appContext, currentTrace, authorizationToken)
             val conversationalText = orchestratorResult.conversationalResponse
             val payload = orchestratorResult.intentPayload
 
@@ -172,6 +200,7 @@ class VybRepository(
 
             Result.success(assistantMessage)
         } catch (e: Exception) {
+            android.util.Log.e("VYB_TRACE", "[$currentTrace] REPOSITORY_EXCEPTION: class=${e.javaClass.name} msg=${e.message}", e)
             val errorMessage = MessageEntity(
                 conversationId = conversationId,
                 sender = "ASSISTANT",
@@ -473,7 +502,7 @@ class VybRepository(
         source: String = "User Conversation",
         confidence: Double = 0.95
     ): Long {
-        return memoryDao.insertMemory(
+        val id = memoryDao.insertMemory(
             MemoryItemEntity(
                 category = category,
                 key = key,
@@ -482,6 +511,18 @@ class VybRepository(
                 confidence = confidence
             )
         )
+        try {
+            cognitiveEngine.lifeContextEngine.ingestDiscoveredFact(
+                rawSentence = "$key $value",
+                category = category,
+                key = key,
+                value = value,
+                confidence = confidence.toFloat()
+            )
+        } catch (e: Exception) {
+            // graceful non-blocking fallback
+        }
+        return id
     }
 
     suspend fun updateMemory(memory: MemoryItemEntity) {
@@ -554,6 +595,103 @@ class VybRepository(
 
     suspend fun deleteVaultItem(id: Long) {
         lifeVaultDao.deleteVaultItemById(id)
+    }
+
+    suspend fun addOrUpdateVaultFact(
+        category: String,
+        key: String,
+        value: String,
+        source: String = com.example.domain.vault.VaultSource.USER_PROVIDED,
+        sourceDetail: String? = null,
+        numericValue: Double? = null,
+        isConfirmed: Boolean = true
+    ): Long {
+        val existing = lifeVaultDao.getItemByCategoryAndKey(category, key)
+        return if (existing == null) {
+            lifeVaultDao.insertVaultItem(
+                LifeVaultItemEntity(
+                    category = category,
+                    key = key,
+                    value = value,
+                    source = source,
+                    sourceDetail = sourceDetail,
+                    numericValue = numericValue,
+                    isConfirmed = isConfirmed,
+                    timestamp = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        } else {
+            lifeVaultDao.updateVaultItem(
+                existing.copy(
+                    value = value,
+                    source = source,
+                    sourceDetail = sourceDetail ?: existing.sourceDetail,
+                    numericValue = numericValue ?: existing.numericValue,
+                    isConfirmed = isConfirmed,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            existing.id
+        }
+    }
+
+    suspend fun syncProfileFactsToVault(
+        profile: com.example.domain.genesis.VybPersonalProfile,
+        email: String = "",
+        phone: String = ""
+    ) {
+        if (profile.name.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.ME, "Full Name", profile.name)
+        }
+        if (profile.callingTitle.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.ME, "Calling Title", profile.callingTitle)
+        }
+        if (email.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.ME, "Email", email)
+        }
+        if (phone.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.ME, "Phone", phone)
+        }
+        if (profile.companyName.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.WORK, "Company Name", profile.companyName)
+        }
+        if (profile.jobTitle.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.WORK, "Job Title", profile.jobTitle)
+        }
+        if (profile.officeAddress.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.WORK, "Office Address", profile.officeAddress)
+        }
+        if (profile.homeAddress.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.PLACES, "Home Address", profile.homeAddress)
+        }
+        if (profile.monthlyIncome > 0) {
+            addOrUpdateVaultFact(
+                com.example.domain.vault.VaultCategory.FINANCE,
+                "Monthly Income",
+                "${profile.currencySymbol} ${profile.monthlyIncome.toInt()}",
+                numericValue = profile.monthlyIncome
+            )
+        }
+        if (profile.fixedCommitments > 0) {
+            addOrUpdateVaultFact(
+                com.example.domain.vault.VaultCategory.FINANCE,
+                "Fixed Commitments",
+                "${profile.currencySymbol} ${profile.fixedCommitments.toInt()}",
+                numericValue = profile.fixedCommitments
+            )
+        }
+        if (profile.savingsTarget > 0) {
+            addOrUpdateVaultFact(
+                com.example.domain.vault.VaultCategory.FINANCE,
+                "Monthly Savings Target",
+                "${profile.currencySymbol} ${profile.savingsTarget.toInt()}",
+                numericValue = profile.savingsTarget
+            )
+        }
+        if (profile.dietaryPreference.isNotBlank()) {
+            addOrUpdateVaultFact(com.example.domain.vault.VaultCategory.HEALTH_FITNESS, "Dietary Preference", profile.dietaryPreference)
+        }
     }
 
     suspend fun resolveVaultConflict(itemId: Long, acceptNew: Boolean): LifeVaultItemEntity? {

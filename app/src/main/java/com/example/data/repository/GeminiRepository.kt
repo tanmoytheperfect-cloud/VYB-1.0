@@ -43,8 +43,31 @@ class GeminiRepository {
     suspend fun generateAssistantResponse(
         prompt: String,
         conversationHistory: List<GeminiContent> = emptyList(),
-        customSystemInstruction: String? = null
+        customSystemInstruction: String? = null,
+        authorizationToken: com.example.domain.privacy.TransferAuthorizationToken? = null
     ): Result<Pair<String, VybIntentPayload>> = withContext(Dispatchers.IO) {
+        if (com.example.domain.privacy.FluidPrivacyFirewall.isLocalOnlyMode.value) {
+            Log.i("GeminiRepository", "Transfer blocked: Local-Only Mode is active")
+            return@withContext Result.failure(IllegalStateException("Local-Only Mode is active: outbound cloud request blocked."))
+        }
+
+        val destination = com.example.domain.privacy.TransferDestination(
+            type = com.example.domain.privacy.TransferDestinationType.CLOUD_AI_SERVICE,
+            name = "Google Gemini API",
+            endpointOrPackage = "https://generativelanguage.googleapis.com"
+        )
+
+        val isAuthorized = com.example.domain.privacy.FluidPrivacyFirewall.validateAndConsumeToken(
+            token = authorizationToken,
+            targetDestination = destination,
+            actualPayload = prompt
+        )
+
+        if (!isAuthorized) {
+            Log.w("GeminiRepository", "Outbound transfer blocked by Fluid Privacy Firewall: unapproved or invalid token.")
+            return@withContext Result.failure(SecurityException("Outbound transfer blocked by Fluid Privacy Firewall: unapproved or invalid token."))
+        }
+
         val apiKey = BuildConfig.GEMINI_API_KEY
 
         val contents = mutableListOf<GeminiContent>()
@@ -81,11 +104,17 @@ class GeminiRepository {
                     return@withContext Result.success(Pair(conversationalText, payload))
                 }
             }
+            if (customSystemInstruction != null) {
+                return@withContext Result.failure(Exception("Gemini returned empty or blank response"))
+            }
             // Fast reliable fallback generator
             val fallback = generateSmartFallback(prompt)
             Result.success(fallback)
         } catch (e: Exception) {
-            Log.e("GeminiRepository", "API or Network Issue, using instant smart engine: ${e.message}")
+            Log.e("GeminiRepository", "API or Network Issue: ${e.message}")
+            if (customSystemInstruction != null) {
+                return@withContext Result.failure(e)
+            }
             val fallback = generateSmartFallback(prompt)
             Result.success(fallback)
         }

@@ -13,6 +13,9 @@ interface TaskDao {
     @Query("SELECT * FROM tasks ORDER BY isCompleted ASC, createdAt DESC")
     fun getAllTasks(): Flow<List<TaskItemEntity>>
 
+    @Query("SELECT * FROM tasks ORDER BY isCompleted ASC, createdAt DESC")
+    suspend fun getAllTasksDirect(): List<TaskItemEntity>
+
     @Query("SELECT * FROM tasks WHERE conversationId = :conversationId ORDER BY isCompleted ASC, createdAt DESC")
     fun getTasksForConversation(conversationId: Long): Flow<List<TaskItemEntity>>
 

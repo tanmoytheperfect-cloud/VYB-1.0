@@ -31,6 +31,12 @@ val CrimsonGlow = Color(0x33EF4444)
 val BlueNeon = Color(0xFF3B82F6)
 val BlueGlow = Color(0x333B82F6)
 
+// Color Aliases
+val Emerald500 = EmeraldNeon
+val Amber500 = AmberNeon
+val Rose500 = RoseNeon
+val PurpleAccent = VioletNeon
+
 // Surface & Borders
 val CardBackground = Color(0xFF121829)
 val CardBackgroundElevated = Color(0xFF182035)

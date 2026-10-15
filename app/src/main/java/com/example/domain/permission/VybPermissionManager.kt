@@ -86,7 +86,7 @@ data class PermissionReport(
     val canRequestInApp: Boolean
 )
 
-class VybPermissionManager(private val context: Context) {
+open class VybPermissionManager(private val context: Context) {
 
     fun checkPermission(type: VybPermissionType): PermissionState {
         return when (type) {
@@ -143,7 +143,7 @@ class VybPermissionManager(private val context: Context) {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun hasUsageStatsPermission(): Boolean {
+    open fun hasUsageStatsPermission(): Boolean {
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
         val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             appOps.unsafeCheckOpNoThrow(

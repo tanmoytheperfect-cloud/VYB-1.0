@@ -12,6 +12,9 @@ interface MemoryDao {
     @Query("SELECT * FROM memories ORDER BY timestamp DESC")
     suspend fun getAllMemoriesDirect(): List<MemoryItemEntity>
 
+    @Query("SELECT COUNT(*) FROM memories")
+    suspend fun getMemoryCountDirect(): Int
+
     @Query("SELECT * FROM memories WHERE `key` LIKE '%' || :query || '%' OR `value` LIKE '%' || :query || '%' ORDER BY timestamp DESC")
     suspend fun searchMemoriesDirect(query: String): List<MemoryItemEntity>
 
